@@ -691,6 +691,8 @@ static int gc570d_video_start_streaming(struct vb2_queue *queue,
 		gc->video_no_signal_frame = NULL;
 		goto out_return;
 	}
+	/* Keep the task valid if the worker exits before STREAMOFF. */
+	get_task_struct(gc->video_thread);
 
 	mutex_unlock(&gc->capture_lock);
 	wake_up_interruptible(&gc->video_wait);
@@ -723,8 +725,10 @@ static void gc570d_video_stop_streaming(struct vb2_queue *queue)
 	gc->video_thread = NULL;
 	mutex_unlock(&gc->capture_lock);
 
-	if (thread)
+	if (thread) {
 		kthread_stop(thread);
+		put_task_struct(thread);
+	}
 
 	mutex_lock(&gc->capture_lock);
 	if (dma_active)
@@ -776,9 +780,13 @@ static void gc570d_video_fill_format(struct v4l2_pix_format *pix)
 static int gc570d_video_querycap(struct file *file, void *priv,
 				  struct v4l2_capability *cap)
 {
+	struct gc570d_dev *gc = video_drvdata(file);
+
 	strscpy(cap->driver, "gc570d", sizeof(cap->driver));
 	strscpy(cap->card, "AVerMedia Live Gamer DUO HDMI 2",
 		sizeof(cap->card));
+	snprintf(cap->bus_info, sizeof(cap->bus_info), "PCI:%s:hdmi2",
+		 pci_name(gc->pdev));
 	return 0;
 }
 
@@ -1653,6 +1661,8 @@ static int gc570d_video0_start_no_signal_locked(struct gc570d_dev *gc)
 		gc->video0_no_signal_frame = NULL;
 		return ret;
 	}
+	/* Keep the task valid if the worker exits before STREAMOFF. */
+	get_task_struct(gc->video0_thread);
 
 	return 0;
 }
@@ -1750,6 +1760,8 @@ static int gc570d_video0_start_streaming(struct vb2_queue *queue,
 		WRITE_ONCE(gc->dma0_continuous, false);
 		goto out_free;
 	}
+	/* Keep the task valid if the worker exits before STREAMOFF. */
+	get_task_struct(gc->video0_thread);
 
 	if (!gc->video_streaming) {
 		atomic64_set(&gc->irq_total, 0);
@@ -1814,6 +1826,7 @@ out_stop:
 	wake_up_interruptible(&gc->video0_wait);
 	if (gc->video0_thread) {
 		kthread_stop(gc->video0_thread);
+		put_task_struct(gc->video0_thread);
 		gc->video0_thread = NULL;
 	}
 	if (irq_enabled)
@@ -1856,8 +1869,10 @@ static void gc570d_video0_stop_streaming(struct vb2_queue *queue)
 	gc->video0_thread = NULL;
 	mutex_unlock(&gc->capture_lock);
 
-	if (thread)
+	if (thread) {
 		kthread_stop(thread);
+		put_task_struct(thread);
+	}
 
 	mutex_lock(&gc->capture_lock);
 	if (dma_active)
@@ -1963,9 +1978,13 @@ static int gc570d_video0_try_format(struct file *file, void *priv,
 static int gc570d_video0_querycap(struct file *file, void *priv,
 				   struct v4l2_capability *cap)
 {
+	struct gc570d_dev *gc = video_drvdata(file);
+
 	strscpy(cap->driver, "gc570d", sizeof(cap->driver));
 	strscpy(cap->card, "AVerMedia Live Gamer DUO HDMI 1",
 		sizeof(cap->card));
+	snprintf(cap->bus_info, sizeof(cap->bus_info), "PCI:%s:hdmi1",
+		 pci_name(gc->pdev));
 	return 0;
 }
 
