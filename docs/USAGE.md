@@ -68,6 +68,17 @@ The HDMI OUT signal remains at the supported source mode. HDMI IN 1 capture is
 a separate SDR path capped at 60 fps and 1920x1080. For example, validated
 1440p120 HDR passthrough is captured as 1080p60 SDR.
 
+For reliable passthrough mode negotiation, use this physical connection order:
+
+1. Connect and power the monitor or TV on HDMI OUT.
+2. Wait for the display to be ready.
+3. Connect or power the source on HDMI IN 1.
+
+This order lets the source negotiate its resolution and refresh rate against
+the downstream display capabilities exposed through the passthrough path. If
+the source was connected first and chose an unsuitable mode, reconnect or
+restart it after HDMI OUT is ready.
+
 ## Hot-plug and disconnected inputs
 
 When an input has no usable video link at stream start, its V4L2 node remains

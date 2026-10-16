@@ -129,6 +129,13 @@ sudo ./scripts/gc570d-load.sh
 The complete automatic negotiation normally takes about ten seconds. The
 module keeps retrying while it waits for the HDMI equipment.
 
+For the most reliable HDMI IN 1 passthrough resolution negotiation, connect
+and power the monitor or TV on HDMI OUT first, then connect or power the source
+on HDMI IN 1. This lets the source read the downstream display capabilities
+during its initial HDMI/EDID negotiation. If the source was connected first
+and selected an unsuitable mode, reconnect or restart the source after the
+HDMI OUT display is ready.
+
 Publish both ALSA inputs through WirePlumber, PipeWire and the
 PulseAudio-compatible API. Run this as the desktop user, not with `sudo`:
 

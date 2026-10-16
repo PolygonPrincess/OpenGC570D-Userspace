@@ -157,6 +157,12 @@ the recovered HDMI IN 1/HDMI OUT sequence automatically in a background state
 machine. It waits and retries while the source or display is absent, and
 normally completes about ten seconds after both are available.
 
+For the most reliable resolution negotiation, connect and power the HDMI OUT
+display before connecting or powering the HDMI IN 1 source. This gives the
+source the downstream display capabilities during its initial HDMI/EDID
+exchange. If they were connected in the opposite order and negotiation fails,
+reconnect or restart the source after the display is ready.
+
 Check progress with:
 
 ```sh
