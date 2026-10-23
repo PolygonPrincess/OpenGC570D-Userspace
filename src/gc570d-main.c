@@ -944,7 +944,7 @@ static struct pci_driver gc570d_pci_driver = {
 };
 module_pci_driver(gc570d_pci_driver);
 
-MODULE_AUTHOR("GC570D Linux reverse-engineering project");
+MODULE_AUTHOR("neoyagami and OpenGC570D contributors");
 MODULE_DESCRIPTION("Experimental AVerMedia Live Gamer DUO GC570D driver");
 MODULE_SOFTDEP("pre: led-class-multicolor");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

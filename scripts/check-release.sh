@@ -42,9 +42,16 @@ if [ "$PROHIBITED_COUNT" -ne 0 ]; then
 fi
 
 for required in \
+	.github/CODEOWNERS \
+	.github/PULL_REQUEST_TEMPLATE.md \
+	.github/workflows/build.yml \
 	README.md \
 	LICENSE \
 	NOTICE.md \
+	MAINTAINERS.md \
+	SECURITY.md \
+	docs/DATA_PROVENANCE.md \
+	docs/PACKAGING.md \
 	docs/REVERSE_ENGINEERING.md \
 	src/gc570d.h \
 	src/gc570d-main.c \
@@ -62,6 +69,7 @@ for required in \
 	assets/no-signal.png \
 	data/gc570d_hdr_lut_3000.inc \
 	data/gc570d_no_signal_640x360.inc \
+	scripts/check-toolchain-selection.sh \
 	scripts/generate-no-signal-asset.sh
 do
 	if [ ! -f "$PROJECT_DIR/$required" ]; then
@@ -71,6 +79,9 @@ do
 done
 
 for licensed in "$PROJECT_DIR/Makefile" \
+	"$PROJECT_DIR"/.github/CODEOWNERS \
+	"$PROJECT_DIR"/.github/PULL_REQUEST_TEMPLATE.md \
+	"$PROJECT_DIR"/.github/workflows/*.yml \
 	"$PROJECT_DIR"/src/*.c \
 	"$PROJECT_DIR"/src/*.h \
 	"$PROJECT_DIR"/data/*.inc \

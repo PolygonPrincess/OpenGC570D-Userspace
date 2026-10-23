@@ -33,6 +33,11 @@ needed for interoperability were retained, including identifiers, register
 sequences, masks, delays, format and timing values, EDID contents, and a
 generated HDR-to-SDR lookup table.
 
+[`DATA_PROVENANCE.md`](DATA_PROVENANCE.md) inventories those embedded data
+sets, distinguishes project-authored assets from byte-identical functional
+data observed in the official software, and records the review still required
+before distribution packaging.
+
 ## AI-assisted workflow
 
 AI agents were used throughout the same iterative process to:

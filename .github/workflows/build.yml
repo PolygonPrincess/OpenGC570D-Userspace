@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-2.0-only
+name: Build kernel module
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fedora-44:
+    name: Fedora 44 / distribution toolchain
+    runs-on: ubuntu-latest
+    container: fedora:44
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf -y --setopt=install_weak_deps=False install \
+            binutils elfutils-libelf-devel findutils gcc git \
+            kernel-devel kmod make
+
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run repository checks
+        run: make check
+
+      - name: Build external module
+        run: |
+          kernel_release=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-devel | sort -V | tail -n 1)
+          kernel_build="/usr/src/kernels/$kernel_release"
+          test -d "$kernel_build"
+          make -j"$(nproc)" KERNEL_RELEASE="$kernel_release" KDIR="$kernel_build"
+          modinfo ./gc570d.ko
+
+      - name: Confirm build leaves generated source unchanged
+        run: git diff --exit-code -- data/gc570d_no_signal_640x360.inc

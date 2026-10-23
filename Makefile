@@ -30,7 +30,8 @@ INSTALL_MOD_DIR ?= extra/gc570d
 NO_SIGNAL_SOURCE := assets/no-signal.png
 NO_SIGNAL_DATA := data/gc570d_no_signal_640x360.inc
 
-.PHONY: all clean install uninstall check no-signal prepare-no-signal
+.PHONY: all clean install uninstall check no-signal prepare-no-signal \
+	print-toolchain
 
 all: prepare-no-signal
 	$(MAKE) -C $(KDIR) M=$(CURDIR) modules
@@ -55,6 +56,10 @@ $(NO_SIGNAL_DATA): $(NO_SIGNAL_SOURCE)
 no-signal:
 	./scripts/generate-no-signal-asset.sh
 
+print-toolchain:
+	@printf 'LLVM=%s\n' "$(LLVM)"
+
 check:
 	sh -n scripts/*.sh
+	./scripts/check-toolchain-selection.sh
 	./scripts/check-release.sh

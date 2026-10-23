@@ -55,3 +55,12 @@ For code changes:
 
 AI-assisted contributions are welcome when disclosed. The contributor remains
 responsible for reviewing and testing the submitted work.
+
+Distribution packaging changes should follow
+[`docs/PACKAGING.md`](docs/PACKAGING.md) and must not claim Secure Boot,
+attestation or anti-cheat compatibility solely because a module has a local
+signature. Review [`docs/DATA_PROVENANCE.md`](docs/DATA_PROVENANCE.md) before
+redistributing the embedded EDID or HDR lookup data.
+
+Security-sensitive reports should follow [`SECURITY.md`](SECURITY.md) instead
+of disclosing exploit details in a public issue.

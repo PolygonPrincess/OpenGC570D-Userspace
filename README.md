@@ -125,6 +125,16 @@ Each source, script, and integration file starts with an SPDX
 | `scripts/` | Build-tree loading, installation, audio setup, status, and release checks |
 | `config/` | systemd autoload and system-wide WirePlumber policy |
 
+Packaging and maintenance information:
+
+- [`MAINTAINERS.md`](MAINTAINERS.md) identifies the maintained hardware and
+  project responsibilities.
+- [`SECURITY.md`](SECURITY.md) describes security-sensitive reporting.
+- [`docs/PACKAGING.md`](docs/PACKAGING.md) defines the intended distribution
+  package boundary and module-signing order.
+- [`docs/DATA_PROVENANCE.md`](docs/DATA_PROVENANCE.md) inventories embedded
+  functional and project-authored data for distributor review.
+
 ## Requirements
 
 - A Linux kernel with headers/build files for the running kernel.
