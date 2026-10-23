@@ -30,11 +30,10 @@ jobs:
 
       - name: Build external module
         run: |
+          generated_hash=$(sha256sum data/gc570d_no_signal_640x360.inc | cut -d ' ' -f 1)
           kernel_release=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-devel | sort -V | tail -n 1)
           kernel_build="/usr/src/kernels/$kernel_release"
           test -d "$kernel_build"
           make -j"$(nproc)" KERNEL_RELEASE="$kernel_release" KDIR="$kernel_build"
           modinfo ./gc570d.ko
-
-      - name: Confirm build leaves generated source unchanged
-        run: git diff --exit-code -- data/gc570d_no_signal_640x360.inc
+          test "$generated_hash" = "$(sha256sum data/gc570d_no_signal_640x360.inc | cut -d ' ' -f 1)"
