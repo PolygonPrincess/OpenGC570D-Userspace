@@ -59,6 +59,7 @@ Validated on the project hardware:
 | HDMI IN 2 audio | `HDMI 2 (Capture Only)`, ALSA capture device 0, stereo S16_LE at 48 kHz; direct ALSA and PipeWire validated |
 | Concurrent operation | Both V4L2 streams and both audio inputs active together through the tested ALSA/PipeWire path |
 | Hot-plug and disconnected inputs | Both V4L2 nodes concurrently supply the built-in generic no-signal frame at 1920x1080 YUYV/60 fps without video DMA; HDMI IN 1 and HDMI IN 2 each physically passed a complete live-to-placeholder-to-live cycle on the same open V4L2 stream, including HDMI IN 1 video and audio recovery while HDMI IN 2 remained active |
+| System suspend (S3/deep) | When idle, the driver quiesces the card and reinitializes the HDMI receivers, EDID/HPD handling and RGB controller after resume. HDMI IN 2 capture recovery was physically validated without reloading the module. An active V4L2 or prepared ALSA capture deliberately prevents system sleep with `-EBUSY`; active V4L2 blocking was physically validated |
 | RGB enclosure | Standard `gc570d:rgb:status` multicolor LED, fixed RGB, single-color breathing and red/yellow/green/cyan/blue/magenta/white breathing cycle |
 
 The 720x480 mode stores a 3:2 raster but represents 4:3 video through its
@@ -110,7 +111,7 @@ Each source, script, and integration file starts with an SPDX
 
 | Path | Responsibility |
 | --- | --- |
-| `src/gc570d-main.c` | PCI probe/removal, module parameters, lifetime, and subsystem coordination |
+| `src/gc570d-main.c` | PCI probe/removal, system suspend/resume, module parameters, lifetime, and subsystem coordination |
 | `src/gc570d-hw.c` | Interrupts, bridge/Xilinx access, and common hardware diagnostics |
 | `src/gc570d-i2c.c` | Transactions through the card's internal I2C controllers |
 | `src/gc570d-receiver.c` | HDMI receiver setup, signal detection, EDID, and color conversion |

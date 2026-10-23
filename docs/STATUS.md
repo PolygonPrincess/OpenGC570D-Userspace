@@ -23,6 +23,9 @@ see [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the requested report details.
 | Saved OBS scene restoring both videos and both audios | Physically validated without manually reordering or recreating sources; both PCM workers running, both video DMAs advancing, four shared-IRQ owners and zero unknown IRQs |
 | Standard RGB writes and colorful breathing cycle | Physically validated |
 | Generic no-signal V4L2 frame on both HDMI inputs | Physically validated concurrently at 1920x1080 YUYV/60 fps; no video DMA or IRQ users |
+| Idle S3/deep suspend and resume | Physically validated twice on Bazzite 44 with kernel `7.2.9-ogc3.1.fc44.x86_64`: the driver quiesced the card, resumed through the full HDMI2 base initialization, restored RGB, kept both V4L2 nodes registered, and captured HDMI IN 2 again at 59.94 fps without a module reload |
+| Suspend while V4L2 capture is active | Physically validated with a continuously streaming HDMI IN 2 V4L2 client: the driver returned `-EBUSY` for both the deep attempt and the subsequent s2idle fallback, preventing sleep without disrupting the capture; a later idle S3 cycle still succeeded |
+| HDMI IN 1 and ALSA recovery across S3 | Implemented but not yet physically validated with a live HDMI IN 1 source or active post-resume ALSA capture |
 | Other recovered 1080p-or-lower capture modes | Not fully validated |
 | VRR, HDCP content, every monitor/source combination | Unsupported or unvalidated |
 

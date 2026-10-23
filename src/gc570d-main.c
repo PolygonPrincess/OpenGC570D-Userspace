@@ -278,7 +278,8 @@ static void gc570d_hdmi1_auto_work(struct work_struct *work)
 	u8 phase;
 	int ret = 0;
 
-	if (READ_ONCE(gc->removing) || !auto_hdmi1)
+	if (READ_ONCE(gc->removing) || READ_ONCE(gc->suspended) ||
+	    !auto_hdmi1)
 		return;
 
 	mutex_lock(&gc->capture_lock);
@@ -410,7 +411,8 @@ out_unlock:
 		dev_warn_ratelimited(&gc->pdev->dev,
 			"HDMI IN 1 automatic phase %s will retry: %d\n",
 			gc570d_hdmi1_auto_phase_name(phase), ret);
-	if (reschedule && !READ_ONCE(gc->removing))
+	if (reschedule && !READ_ONCE(gc->removing) &&
+	    !READ_ONCE(gc->suspended))
 		schedule_delayed_work(&gc->hdmi1_auto_work,
 				      ret ? retry_delay : next_delay);
 }
@@ -905,6 +907,101 @@ static int gc570d_probe(struct pci_dev *pdev,
 	return 0;
 }
 
+static void gc570d_reset_resume_state(struct gc570d_dev *gc)
+{
+	gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_RECEIVER;
+	gc->hdmi1_auto_ready = false;
+	gc->splitter_rclk = 0;
+	gc->splitter_main_timer_serviced = false;
+	gc->splitter_video_stable_pending = false;
+	gc->splitter_channel_active_mask = 0;
+	gc->splitter_video_stable_mask = 0;
+	gc->splitter_worker_state4_mask = 0;
+	gc->splitter_eq_state = 0;
+	gc->splitter_eq_retry = 0;
+	memset(gc->splitter_pclk, 0, sizeof(gc->splitter_pclk));
+	memset(gc->splitter_vclk, 0, sizeof(gc->splitter_vclk));
+	gc->splitter_receiver_hdcp_off = false;
+	gc->video0_receiver_output_valid = false;
+	gc->video0_receiver_width = 0;
+	gc->video0_receiver_height = 0;
+	atomic_set(&gc->control_irq_seen, 0);
+	atomic_set(&gc->audio_irq_pending, 0);
+	atomic_set(&gc->audio0_irq_pending, 0);
+	reinit_completion(&gc->dma_completion);
+}
+
+static int gc570d_suspend(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct gc570d_dev *gc = pci_get_drvdata(pdev);
+
+	mutex_lock(&gc->capture_lock);
+	if (gc->video_streaming || gc->video0_streaming ||
+	    gc->audio_prepared || gc->audio0_prepared ||
+	    gc->video_irq_users) {
+		dev_warn(dev,
+			 "system suspend refused while a video or audio capture stream is active\n");
+		mutex_unlock(&gc->capture_lock);
+		return -EBUSY;
+	}
+	WRITE_ONCE(gc->suspended, true);
+	mutex_unlock(&gc->capture_lock);
+
+	cancel_delayed_work_sync(&gc->hdmi1_auto_work);
+	gc570d_splitter_windows_state_pump_stop(gc);
+	cancel_delayed_work_sync(&gc->led_work);
+
+	mutex_lock(&gc->capture_lock);
+	writel(0, gc->bar0 + GC570D_REG_DMA_START);
+	writel(0, gc->bar0 + GC570D_DMA0_DESC_CONTROL);
+	writel(0, gc->bar0 + GC570D_DMA_DESC_CONTROL);
+	writel(0x7fff, gc->bar0 + GC570D_REG_IRQ_STATUS);
+	pci_clear_master(pdev);
+	mutex_unlock(&gc->capture_lock);
+
+	mutex_lock(&gc->led_lock);
+	gc->led_initialized = false;
+	gc->led_active = false;
+	mutex_unlock(&gc->led_lock);
+
+	dev_info(dev, "capture hardware quiesced for system suspend\n");
+	return 0;
+}
+
+static int gc570d_resume(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct gc570d_dev *gc = pci_get_drvdata(pdev);
+	int led_ret;
+	int ret;
+
+	mutex_lock(&gc->capture_lock);
+	gc570d_reset_resume_state(gc);
+	ret = gc570d_hdmi2_base_init(gc);
+	if (ret) {
+		mutex_unlock(&gc->capture_lock);
+		return dev_err_probe(dev, ret,
+				     "failed to reinitialize capture hardware after system resume\n");
+	}
+	WRITE_ONCE(gc->suspended, false);
+	mutex_unlock(&gc->capture_lock);
+
+	led_ret = gc570d_led_resume(gc);
+	if (led_ret)
+		dev_warn(dev, "RGB restore after system resume failed: %d\n",
+			 led_ret);
+	if (auto_hdmi1)
+		schedule_delayed_work(&gc->hdmi1_auto_work, 0);
+
+	dev_info(dev,
+		 "capture hardware reinitialized after system resume; HDMI inputs are renegotiating\n");
+	return 0;
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(gc570d_pm_ops, gc570d_suspend,
+				gc570d_resume);
+
 static void gc570d_remove(struct pci_dev *pdev)
 {
 	struct gc570d_dev *gc = pci_get_drvdata(pdev);
@@ -941,6 +1038,9 @@ static struct pci_driver gc570d_pci_driver = {
 	.id_table = gc570d_pci_ids,
 	.probe = gc570d_probe,
 	.remove = gc570d_remove,
+	.driver = {
+		.pm = pm_sleep_ptr(&gc570d_pm_ops),
+	},
 };
 module_pci_driver(gc570d_pci_driver);
 

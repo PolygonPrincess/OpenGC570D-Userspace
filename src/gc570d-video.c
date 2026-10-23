@@ -599,6 +599,10 @@ static int gc570d_video_start_streaming(struct vb2_queue *queue,
 	int ret;
 
 	mutex_lock(&gc->capture_lock);
+	if (READ_ONCE(gc->suspended)) {
+		ret = -EBUSY;
+		goto out_return;
+	}
 	if (gc->video_streaming || gc->video0_streaming) {
 		ret = -EBUSY;
 		goto out_return;
@@ -1684,6 +1688,10 @@ static int gc570d_video0_start_streaming(struct vb2_queue *queue,
 	}
 
 	mutex_lock(&gc->capture_lock);
+	if (READ_ONCE(gc->suspended)) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
 	/* HDMI IN 2 audio DMA is independent of HDMI IN 1 video DMA0. */
 	if (gc->video0_streaming) {
 		ret = -EBUSY;

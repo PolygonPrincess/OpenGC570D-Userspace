@@ -744,6 +744,10 @@ static int gc570d_audio_pcm_prepare(struct snd_pcm_substream *substream)
 	int ret;
 
 	mutex_lock(&gc->capture_lock);
+	if (READ_ONCE(gc->suspended)) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
 	if (gc->audio_prepared) {
 		ret = 0;
 		gc->audio_pcm_pos = 0;
@@ -1171,6 +1175,10 @@ static int gc570d_audio0_pcm_prepare(struct snd_pcm_substream *substream)
 	int ret;
 
 	mutex_lock(&gc->capture_lock);
+	if (READ_ONCE(gc->suspended)) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
 	if (gc->audio0_prepared) {
 		ret = 0;
 		gc->audio0_pcm_pos = 0;

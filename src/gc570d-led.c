@@ -199,7 +199,8 @@ void gc570d_led_breath_work(struct work_struct *work)
 	int ret;
 
 	mutex_lock(&gc->led_lock);
-	if ((!gc->led_breathing && !gc->led_colorful) || gc->led_removing)
+	if ((!gc->led_breathing && !gc->led_colorful) || gc->led_removing ||
+	    READ_ONCE(gc->suspended))
 		goto out_unlock;
 
 	/* The official driver: component = base * step / 50. */
@@ -249,8 +250,9 @@ void gc570d_led_breath_work(struct work_struct *work)
 		gc->led_step--;
 	}
 
-	mod_delayed_work(system_wq, &gc->led_work,
-			 msecs_to_jiffies(GC570D_LED_BREATH_DELAY_MS));
+	if (!READ_ONCE(gc->suspended))
+		mod_delayed_work(system_wq, &gc->led_work,
+				 msecs_to_jiffies(GC570D_LED_BREATH_DELAY_MS));
 
 out_unlock:
 	mutex_unlock(&gc->led_lock);
@@ -432,6 +434,38 @@ int gc570d_led_register(struct gc570d_dev *gc)
 		 "LED PASS: %s registered; colorful breathing plus white enabled\n",
 		 GC570D_LED_NAME);
 	return 0;
+}
+
+int gc570d_led_resume(struct gc570d_dev *gc)
+{
+	bool animated;
+	int ret;
+
+	if (!gc->led_registered)
+		return 0;
+
+	mutex_lock(&gc->led_lock);
+	if (gc->led_removing) {
+		ret = -ENODEV;
+		goto out_unlock;
+	}
+
+	ret = gc570d_led_hw_init(gc);
+	if (ret)
+		goto out_unlock;
+
+	animated = gc->led_breathing || gc->led_colorful;
+	if (animated)
+		mod_delayed_work(system_wq, &gc->led_work, 0);
+	else
+		ret = gc570d_led_hw_set_rgb(gc,
+					   gc->led_subleds[0].brightness,
+					   gc->led_subleds[1].brightness,
+					   gc->led_subleds[2].brightness);
+
+out_unlock:
+	mutex_unlock(&gc->led_lock);
+	return ret;
 }
 
 void gc570d_led_unregister(struct gc570d_dev *gc)

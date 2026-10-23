@@ -422,6 +422,7 @@ struct gc570d_dev {
 	struct delayed_work hdmi1_auto_work;
 	u8 hdmi1_auto_phase;
 	bool hdmi1_auto_ready;
+	bool suspended;
 	bool removing;
 	struct led_classdev_mc led_mcdev;
 	struct mc_subled led_subleds[3];
@@ -481,6 +482,7 @@ int gc570d_it68051_timing_init(struct gc570d_dev *gc);
 int gc570d_it68051_video_output_on(struct gc570d_dev *gc);
 void gc570d_led_breath_work(struct work_struct *work);
 int gc570d_led_register(struct gc570d_dev *gc);
+int gc570d_led_resume(struct gc570d_dev *gc);
 void gc570d_led_unregister(struct gc570d_dev *gc);
 int gc570d_receiver_read8(struct gc570d_dev *gc,
 				 const struct gc570d_i2c_bus *bus,

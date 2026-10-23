@@ -106,6 +106,29 @@ restarts only HDMI IN 1 audio DMA and real stereo audio returns without closing
 the audio client or selecting the source again. This video-and-audio recovery
 was physically validated while HDMI IN 2 continued operating.
 
+## System suspend and resume
+
+System suspend is allowed only while the capture hardware is idle. For an
+S3/deep suspend, the driver stops its background workers and DMA engines,
+clears pending interrupts, and releases PCI bus mastering. On resume it runs
+the HDMI receiver, EDID/HPD and RGB initialization again, then restarts the
+automatic HDMI IN 1 negotiation. HDMI IN 1 and passthrough can therefore take
+about ten seconds to return after wake, just as they do after loading the
+module.
+
+If either V4L2 input is streaming, or either ALSA input has been prepared for
+capture, the driver returns `-EBUSY` and prevents the system from sleeping.
+This protects active capture sessions used by direct V4L2/ALSA clients and by
+applications such as OBS or Discord. Stop or close the active capture and
+request suspend again. A desktop environment may lock the session before the
+kernel rejects the suspend attempt; that lock screen does not mean the machine
+entered sleep.
+
+Idle S3/deep resume and active-V4L2 suspend prevention were physically
+validated on Bazzite 44. HDMI IN 2 returned at 59.94 fps without reloading the
+module, and RGB state was restored. Recovery of a live HDMI IN 1 source and
+post-resume ALSA capture still require dedicated physical validation.
+
 ## Direct ALSA capture
 
 List the card and PCM device numbers:
