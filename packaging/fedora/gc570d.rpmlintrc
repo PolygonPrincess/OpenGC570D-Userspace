@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+# kmodtool intentionally emits one source-carrying AKMOD package and one empty
+# tracking metapackage. Neither is expected to contain a conventional binary or
+# its own documentation; the gc570d common package carries the documentation.
+addFilter(r"^akmod-gc570d\..*: [EW]: (no-binary|no-documentation)")
+addFilter(r"^kmod-gc570d\..*: [EW]: (no-binary|no-documentation)")
+
+# LICENSE is the unmodified GNU GPL version 2 text distributed by upstream.
+# rpmlint flags the historical FSF postal address embedded in that license.
+addFilter(r"^gc570d\.(noarch|src): E: incorrect-fsf-address")

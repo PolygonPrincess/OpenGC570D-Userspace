@@ -53,6 +53,12 @@ for required in \
 	docs/DATA_PROVENANCE.md \
 	docs/PACKAGING.md \
 	docs/REVERSE_ENGINEERING.md \
+	packaging/fedora/README.md \
+	packaging/fedora/gc570d-kmod.spec \
+	packaging/fedora/gc570d.spec \
+	packaging/fedora/gc570d.rpmlintrc \
+	packaging/ublue/REQUEST.md \
+	packaging/ublue/build-kmod-gc570d.sh \
 	src/gc570d.h \
 	src/gc570d-main.c \
 	src/gc570d-hw.c \
@@ -70,6 +76,7 @@ for required in \
 	data/gc570d_hdr_lut_3000.inc \
 	data/gc570d_no_signal_640x360.inc \
 	scripts/check-toolchain-selection.sh \
+	scripts/check-fedora-packaging.sh \
 	scripts/generate-no-signal-asset.sh
 do
 	if [ ! -f "$PROJECT_DIR/$required" ]; then
@@ -86,6 +93,9 @@ for licensed in "$PROJECT_DIR/Makefile" \
 	"$PROJECT_DIR"/src/*.h \
 	"$PROJECT_DIR"/data/*.inc \
 	"$PROJECT_DIR"/assets/*.md \
+	"$PROJECT_DIR"/packaging/fedora/*.spec \
+	"$PROJECT_DIR"/packaging/fedora/*.rpmlintrc \
+	"$PROJECT_DIR"/packaging/ublue/*.sh \
 	"$PROJECT_DIR"/scripts/*.sh \
 	"$PROJECT_DIR"/config/systemd/*.service \
 	"$PROJECT_DIR"/config/wireplumber/*.conf

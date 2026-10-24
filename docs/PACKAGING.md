@@ -25,7 +25,19 @@ CachyOS or other Clang-kernel package must still be built against that
 distribution's own headers; forcing Clang against a GCC-built kernel is not an
 equivalent compatibility test.
 
+Distribution builds should pass `GC570D_DEVELOPER_DEBUGFS=0` when compiling
+the kernel module. This removes the complete reverse-engineering `debugfs`
+interface from the build; normal automatic initialization, capture,
+passthrough, audio, hot-plug, RGB and system power management do not depend on
+it. Direct source builds keep that interface enabled for development unless
+the option is explicitly disabled.
+
 ## Suggested package split
+
+Reference Fedora specifications are maintained in `packaging/fedora/` and
+build from the immutable upstream release archive. Keep the version in
+`gc570d-kmod.spec` and `gc570d.spec` synchronized; `make check` verifies this
+and the required package relationship.
 
 - A kernel package (`gc570d-kmod`/`akmod-gc570d`, or the distribution's
   equivalent) builds `gc570d.ko` for the exact target kernel.

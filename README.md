@@ -124,6 +124,7 @@ Each source, script, and integration file starts with an SPDX
 | `assets/` | Editable project artwork, including the replaceable 640x360 no-signal frame |
 | `data/` | Generated/static data embedded by the driver: HDR LUT and YUYV no-signal frame |
 | `scripts/` | Build-tree loading, installation, audio setup, status, and release checks |
+| `packaging/` | Fedora AKMOD/RPM specifications and Universal Blue integration proposal |
 | `config/` | systemd autoload and system-wide WirePlumber policy |
 
 Packaging and maintenance information:

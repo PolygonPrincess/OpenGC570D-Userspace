@@ -13,6 +13,15 @@ gc570d-y := \
 	src/gc570d-audio.o \
 	src/gc570d-video.o
 
+# Research builds keep the reverse-engineering debugfs interface available.
+# Distribution packages can remove the complete interface from the compiled
+# module with GC570D_DEVELOPER_DEBUGFS=0; normal V4L2, ALSA, passthrough, RGB,
+# hot-plug and power-management operation does not depend on debugfs.
+GC570D_DEVELOPER_DEBUGFS ?= 1
+ifeq ($(GC570D_DEVELOPER_DEBUGFS),1)
+ccflags-y += -DGC570D_DEVELOPER_DEBUGFS
+endif
+
 KERNEL_RELEASE ?= $(shell uname -r)
 KDIR ?= /lib/modules/$(KERNEL_RELEASE)/build
 
@@ -62,4 +71,5 @@ print-toolchain:
 check:
 	sh -n scripts/*.sh
 	./scripts/check-toolchain-selection.sh
+	./scripts/check-fedora-packaging.sh
 	./scripts/check-release.sh

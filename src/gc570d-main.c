@@ -584,6 +584,7 @@ static int gc570d_probe(struct pci_dev *pdev,
 			 "LED class registration/default breathing failed: %d\n",
 			 ret);
 
+#ifdef GC570D_DEVELOPER_DEBUGFS
 	gc->debugfs_dir = debugfs_create_dir("gc570d", NULL);
 	if (!IS_ERR(gc->debugfs_dir))
 		debugfs_create_file("registers", 0400, gc->debugfs_dir, gc,
@@ -896,6 +897,7 @@ static int gc570d_probe(struct pci_dev *pdev,
 		debugfs_create_file("audio0_pcm_status", 0400,
 				    gc->debugfs_dir, gc,
 				    &gc570d_audio0_pcm_status_fops);
+#endif
 
 	dev_info(&pdev->dev,
 		 "probe complete: BAR0 %pr mapped at %pR, HDMI IN 1 automatic initialization=%s\n",
@@ -1009,7 +1011,8 @@ static void gc570d_remove(struct pci_dev *pdev)
 	WRITE_ONCE(gc->removing, true);
 	cancel_delayed_work_sync(&gc->hdmi1_auto_work);
 	gc570d_splitter_windows_state_pump_stop(gc);
-	debugfs_remove_recursive(gc->debugfs_dir);
+	if (!IS_ERR_OR_NULL(gc->debugfs_dir))
+		debugfs_remove_recursive(gc->debugfs_dir);
 	gc570d_led_unregister(gc);
 	if (gc->audio_card)
 		snd_card_disconnect(gc->audio_card);
