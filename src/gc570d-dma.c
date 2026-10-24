@@ -291,6 +291,16 @@ int gc570d_vip0_detect_signal(
 	colorimetry = avi16 >> 6;
 	extended_colorimetry = (avi17 >> 4) & 0x07;
 
+	/*
+	 * IT68051 reports the horizontal sample count for YCbCr 4:2:0.  The
+	 * official driver expands that count back to the logical pixel width
+	 * before publishing and classifying the decoded format.  Without this,
+	 * 3840x2160 4:2:0 appears as 1920x2160, incorrectly selects working class
+	 * 1/Xilinx mode 0 and bypasses the card's 4K-to-1080p preprocessing path.
+	 */
+	if (input_color == 3)
+		width *= 2;
+
 out_restore_page:
 	restore_ret = gc570d_it68051_select_page(gc, 0);
 	if (!ret)
@@ -302,12 +312,14 @@ out_restore_page:
 		return -ENOLINK;
 	if (value[1] & BIT(1))
 		return -EINVAL;
-	if (output_color != 0)
-		return -EILSEQ;
 	if (colorimetry == 3 &&
 	    (extended_colorimetry == 5 || extended_colorimetry == 6)) {
+		if (output_color != 0)
+			return -EILSEQ;
 		signal->profile = GC570D_VIDEO0_HDR_BT2020;
 	} else if (input_color == 0 && colorimetry != 3) {
+		if (output_color != 0)
+			return -EILSEQ;
 		/*
 		 * The official driver leaves CVDecVIP+0x68 at zero when no HDR DRM
 		 * packet is active.  The validated PS5 1440p60 SDR transport is
@@ -316,6 +328,15 @@ out_restore_page:
 		 * that exact family instead of accepting arbitrary non-BT.2020 YUV.
 		 */
 		signal->profile = GC570D_VIDEO0_SDR_RGB;
+	} else if (input_color == 3 && colorimetry == 2 &&
+		   extended_colorimetry == 0 && output_color == 2) {
+		/*
+		 * For the observed 4K60 SDR BT.709 YCbCr 4:2:0 transport, Windows
+		 * keeps the IT68051 output in YCbCr 4:4:4 and takes its no-CSC path.
+		 * FUN_1400a7c50 maps BT.709 to sampling/colorspace nibbles 3/3;
+		 * the negotiated 1080p Capture Video geometry supplies nibble 3.
+		 */
+		signal->profile = GC570D_VIDEO0_SDR_YUV420_BT709;
 	} else {
 		return -ENODATA;
 	}
@@ -350,12 +371,14 @@ out_restore_page:
 				      signal->frame_rate > 60 ? 3 : 0;
 
 	dev_info(&gc->pdev->dev,
-		 "VIP0 signal validated: %ux%u@%u class=%u xilinx_mode=%u vip=%ux%u profile=%s input_color=%u C=%u EC=%u output=RGB\n",
+		 "VIP0 signal validated: %ux%u@%u class=%u xilinx_mode=%u vip=%ux%u profile=%s input_color=%u C=%u EC=%u output=%s\n",
 		 width, height,
 		 signal->frame_rate, signal->working_mode, signal->xilinx_mode,
 		 signal->vip_width, signal->vip_height,
 		 signal->profile == GC570D_VIDEO0_HDR_BT2020 ? "HDR-BT.2020" :
-		 "SDR-RGB", input_color, colorimetry, extended_colorimetry);
+		 signal->profile == GC570D_VIDEO0_SDR_RGB ? "SDR-RGB" :
+		 "SDR-YCbCr420-BT.709", input_color, colorimetry,
+		 extended_colorimetry, output_color == 0 ? "RGB" : "YCbCr444");
 
 	return 0;
 }
@@ -375,13 +398,16 @@ static int gc570d_vip0_profile_show(struct seq_file *s, void *unused)
 
 	control = ((gc570d_video0_geometry_class(gc->video0_width,
 						   gc->video0_height) + 2) << 8) |
-		(signal.profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 : 0x10);
+		(signal.profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 :
+		 signal.profile == GC570D_VIDEO0_SDR_RGB ? 0x10 : 0x33);
 	if (signal.profile == GC570D_VIDEO0_HDR_BT2020)
 		control |= BIT(16);
 	seq_printf(s,
 		   "profile=%s source=%ux%u@%u class=%u vip=%ux%u xilinx_mode=%u output=%ux%u xilinx_control=0x%08x hdr_lut=%s\n",
 		   signal.profile == GC570D_VIDEO0_HDR_BT2020 ?
-		   "HDR-BT.2020" : "SDR-RGB",
+		   "HDR-BT.2020" :
+		   signal.profile == GC570D_VIDEO0_SDR_RGB ?
+		   "SDR-RGB" : "SDR-YCbCr420-BT.709",
 		   signal.detected_width, signal.detected_height,
 		   signal.frame_rate, signal.working_mode,
 		   signal.vip_width, signal.vip_height, signal.xilinx_mode,
@@ -398,7 +424,8 @@ static u32 gc570d_xilinx_video0_control(
 	u32 control;
 
 	control = ((gc570d_video0_geometry_class(width, height) + 2) << 8) |
-		(signal->profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 : 0x10);
+		(signal->profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 :
+		 signal->profile == GC570D_VIDEO0_SDR_RGB ? 0x10 : 0x33);
 	if (signal->profile == GC570D_VIDEO0_HDR_BT2020)
 		control |= BIT(16);
 	return control;
@@ -680,7 +707,9 @@ static ssize_t gc570d_vip0_init_write(struct file *file,
 		 "VIP channel 0 initialized for %ux%u %s input to %ux%u packed YUY2\n",
 		 signal.detected_width, signal.detected_height,
 		 signal.profile == GC570D_VIDEO0_HDR_BT2020 ?
-		 "BT.2020 HDR" : "RGB SDR",
+		 "BT.2020 HDR" :
+		 signal.profile == GC570D_VIDEO0_SDR_RGB ?
+		 "RGB SDR" : "BT.709 YCbCr420 SDR",
 		 gc->video0_width, gc->video0_height);
 	return count;
 }

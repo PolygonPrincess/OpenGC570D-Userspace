@@ -1547,7 +1547,9 @@ static int gc570d_video0_try_recover_live(struct gc570d_dev *gc,
 		 "HDMI IN 1 signal stable; switched the open V4L2 stream from the built-in placeholder to %ux%u %s capture at %ux%u with four private DMA0 slots\n",
 		 signal.detected_width, signal.detected_height,
 		 signal.profile == GC570D_VIDEO0_HDR_BT2020 ?
-		 "BT.2020 HDR-to-SDR" : "RGB SDR",
+		 "BT.2020 HDR-to-SDR" :
+		 signal.profile == GC570D_VIDEO0_SDR_RGB ?
+		 "RGB SDR" : "BT.709 YCbCr420 SDR",
 		 gc->video0_width, gc->video0_height);
 	return 1;
 
@@ -1811,7 +1813,9 @@ static int gc570d_video0_start_streaming(struct vb2_queue *queue,
 		 "HDMI IN 1 V4L2 DMA0 private ring started: %ux%u %s to %ux%u YUYV at %u fps\n",
 		 signal.detected_width, signal.detected_height,
 		 signal.profile == GC570D_VIDEO0_HDR_BT2020 ?
-		 "BT.2020 HDR" : "RGB SDR",
+		 "BT.2020 HDR" :
+		 signal.profile == GC570D_VIDEO0_SDR_RGB ?
+		 "RGB SDR" : "BT.709 YCbCr420 SDR",
 		 gc->video0_width, gc->video0_height,
 		 gc->video0_frame_interval == 200000 ? 50 : 60);
 	return 0;

@@ -66,7 +66,7 @@ start `gc570d-hdmi2` first, wait until it is streaming, and then start
 
 The HDMI OUT signal remains at the supported source mode. HDMI IN 1 capture is
 a separate SDR path capped at 60 fps and 1920x1080. For example, validated
-1440p120 HDR passthrough is captured as 1080p60 SDR.
+2160p60 SDR/HDR and 1440p120 HDR passthrough are captured as 1080p60 SDR.
 
 For reliable passthrough mode negotiation, use this physical connection order:
 

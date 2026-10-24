@@ -7,7 +7,7 @@
 %global upstream_name OpenGC570D
 
 Name:           %{kmod_name}-kmod
-Version:        1.0.4
+Version:        1.0.5
 Release:        1%{?dist}
 Summary:        Linux kernel module for the AVerMedia Live Gamer DUO GC570D
 License:        GPL-2.0-only
@@ -60,6 +60,10 @@ done
 %{?akmod_install}
 
 %changelog
+* Sat Oct 24 2026 neoyagami <neoyagami@gmail.com> - 1.0.5-1
+- Correct logical width detection for 2160p YCbCr 4:2:0 input
+- Add the validated 2160p60 SDR BT.709 capture profile
+
 * Fri Oct 23 2026 neoyagami <neoyagami@gmail.com> - 1.0.4-1
 - Disable the development debugfs interface in distribution builds
 - Add the initial Universal Blue/Fedora AKMOD packaging

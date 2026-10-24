@@ -12,6 +12,7 @@ see [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the requested report details.
 | HDMI IN 2 stereo S16_LE/48 kHz ALSA | Physically validated |
 | HDMI IN 1 open-stream live/no-signal/live hotplug | Physically validated without STREAMOFF: live 1440p60 HDR input/downscaled capture and audio, built-in frame plus silent PCM after physical disconnect, then automatic return of video and real audio after reconnect; HDMI IN 2 remained active |
 | HDMI IN 1 2160p60 SDR/HDR passthrough | Physically validated |
+| HDMI IN 1 2160p60 SDR/HDR to 1080p60 SDR capture | Physically validated, including SDR-to-HDR and HDR-to-SDR recovery on the same open V4L2 stream |
 | HDMI IN 1 1440p60 SDR/HDR passthrough | Physically validated |
 | HDMI IN 1 1440p120 HDR passthrough | Physically validated |
 | HDMI IN 1 1440p60 SDR/HDR to 1080p60 SDR capture | Physically validated |

@@ -225,6 +225,7 @@ struct gc570d_buffer {
 enum gc570d_video0_profile {
 	GC570D_VIDEO0_HDR_BT2020,
 	GC570D_VIDEO0_SDR_RGB,
+	GC570D_VIDEO0_SDR_YUV420_BT709,
 };
 
 struct gc570d_video0_signal {

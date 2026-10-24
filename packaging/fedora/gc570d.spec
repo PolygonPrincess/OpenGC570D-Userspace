@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
 Name:           gc570d
-Version:        1.0.4
+Version:        1.0.5
 Release:        1%{?dist}
 Summary:        Integration files for the OpenGC570D capture-card driver
 License:        GPL-2.0-only
@@ -42,6 +42,10 @@ install -D -m 0644 config/wireplumber/51-gc570d.conf \
 %{_datadir}/wireplumber/wireplumber.conf.d/51-gc570d.conf
 
 %changelog
+* Sat Oct 24 2026 neoyagami <neoyagami@gmail.com> - 1.0.5-1
+- Document validated 2160p60 SDR and HDR capture support
+- Build portable installations with the distribution profile
+
 * Fri Oct 23 2026 neoyagami <neoyagami@gmail.com> - 1.0.4-1
 - Add the initial common package for distribution builds
 - Install documentation and the system WirePlumber capture policy

@@ -20,7 +20,7 @@ MODULE_SELINUX_PATH='/var/lib/gc570d(/.*)?'
 SYSTEMD_UNIT=/etc/systemd/system/gc570d.service
 WIREPLUMBER_POLICY=/etc/wireplumber/wireplumber.conf.d/51-gc570d.conf
 
-make -C "$PROJECT_DIR" || die "module build failed"
+make -C "$PROJECT_DIR" GC570D_DEVELOPER_DEBUGFS=0 || die "module build failed"
 install -D -m 0644 "$PROJECT_DIR/gc570d.ko" "$MODULE_DIR/gc570d.ko"
 
 # Fedora's SELinux policy permits module_load from modules_object_t, not the
