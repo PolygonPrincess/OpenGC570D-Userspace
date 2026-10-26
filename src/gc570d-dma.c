@@ -318,9 +318,9 @@ int gc570d_vip0_detect_signal(
 	extended_colorimetry = (avi17 >> 4) & 0x07;
 
 	/*
-	 * IT68051 reports the horizontal sample count for YCbCr 4:2:0.  The
+	 * IT68051 reports the horizontal sample count for YCbCr 4:2:0. The
 	 * official driver expands that count back to the logical pixel width
-	 * before publishing and classifying the decoded format.  Without this,
+	 * before publishing and classifying the decoded format. Without this,
 	 * 3840x2160 4:2:0 appears as 1920x2160, incorrectly selects working class
 	 * 1/Xilinx mode 0 and bypasses the card's 4K-to-1080p preprocessing path.
 	 */
@@ -338,20 +338,18 @@ out_restore_page:
 		return -ENOLINK;
 	if (value[1] & BIT(1))
 		return -EINVAL;
+
 	if (colorimetry == 3 &&
 	    (extended_colorimetry == 5 || extended_colorimetry == 6)) {
 		if (output_color != 0)
 			return -EILSEQ;
 		signal->profile = GC570D_VIDEO0_HDR_BT2020;
-	} else if (input_color == 0 && colorimetry != 3) {
-		if (output_color != 0)
-			return -EILSEQ;
+	} else if (colorimetry != 3 && output_color == 0) {
 		/*
 		 * The official driver leaves CVDecVIP+0x68 at zero when no HDR DRM
-		 * packet is active.  The validated PS5 1440p60 SDR transport is
-		 * RGB444/depth-code zero, while the official driver keeps RGB output and
-		 * takes its no-CSC branch.  Bound the first SDR implementation to
-		 * that exact family instead of accepting arbitrary non-BT.2020 YUV.
+		 * packet is active.  Both native RGB SDR and IT68051 CSC-converted
+		 * YCbCr SDR (4:4:4 and 4:2:2) present RGB444 on the IT68051 output
+		 * bus and use the 0x310 SDR transform.
 		 */
 		signal->profile = GC570D_VIDEO0_SDR_RGB;
 	} else if (input_color == 3 && colorimetry == 2 &&
@@ -424,8 +422,8 @@ static int gc570d_vip0_profile_show(struct seq_file *s, void *unused)
 
 	control = ((gc570d_video0_geometry_class(gc->video0_width,
 						   gc->video0_height) + 2) << 8) |
-		(signal.profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 :
-		 signal.profile == GC570D_VIDEO0_SDR_RGB ? 0x10 : 0x33);
+		  (signal.profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 :
+		   signal.profile == GC570D_VIDEO0_SDR_RGB ? 0x10 : 0x33);
 	if (signal.profile == GC570D_VIDEO0_HDR_BT2020)
 		control |= BIT(16);
 	seq_printf(s,
@@ -450,8 +448,8 @@ static u32 gc570d_xilinx_video0_control(
 	u32 control;
 
 	control = ((gc570d_video0_geometry_class(width, height) + 2) << 8) |
-		(signal->profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 :
-		 signal->profile == GC570D_VIDEO0_SDR_RGB ? 0x10 : 0x33);
+		  (signal->profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 :
+		   signal->profile == GC570D_VIDEO0_SDR_RGB ? 0x10 : 0x33);
 	if (signal->profile == GC570D_VIDEO0_HDR_BT2020)
 		control |= BIT(16);
 	return control;

@@ -1728,6 +1728,16 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 		0x3e, 0x4f, 0x09, 0x69, 0x0d, 0x0b, 0x00, 0x4f,
 		0x09, 0xfe, 0x3f, 0x1d, 0x11, 0x00,
 	};
+	static const u8 yuv_bt709_to_rgb_full_csc[] = {
+		0x04, 0x00, 0xa7, 0x4f, 0x09, 0xbb, 0x3b, 0x4c,
+		0x3e, 0x4f, 0x09, 0x58, 0x0e, 0x00, 0x00, 0x4f,
+		0x09, 0x00, 0x00, 0xec, 0x10, 0x00,
+	};
+	static const u8 yuv_bt601_to_rgb_full_csc[] = {
+		0x04, 0x00, 0xa7, 0x4f, 0x09, 0x81, 0x39, 0xdd,
+		0x3c, 0x4f, 0x09, 0xc4, 0x0c, 0x00, 0x00, 0x4f,
+		0x09, 0x00, 0x00, 0x17, 0x10, 0x00,
+	};
 	const struct gc570d_i2c_bus *bus = &gc570d_receiver_buses[0];
 	u32 last_irq;
 	u32 last_status;
@@ -1953,7 +1963,14 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	 * reconstruction even though the cached DRM packet is not directly
 	 * addressable through the IT68051 register interface.
 	 */
-	output_color = input_color != 0 && !hdr_bt2020 ? 2 : 0;
+	/*
+	 * For 4K60 SDR BT.709 YCbCr 4:2:0 (input_color == 3), Windows keeps the
+	 * IT68051 output in YCbCr 4:4:4 (output_color = 2) and uses the Xilinx
+	 * 0x33 path.  For HDR BT.2020 and 4:2:2/4:4:4 SDR YCbCr inputs (such as
+	 * 480p/576p/720p YCbCr upscalers and consoles), drive the IT68051 output
+	 * bus as RGB444 (output_color = 0) with the hardware YCbCr-to-RGB CSC.
+	 */
+	output_color = (input_color == 3 && !hdr_bt2020) ? 2 : 0;
 	ret = gc570d_it68051_select_page(gc, 0);
 	if (ret)
 		goto out_restore_page;
@@ -1983,15 +2000,17 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	if (ret)
 		goto out_restore_page;
 	if (output_color == 0 && input_color != 0) {
-		/* HDR BT.2020 branch: DATA_14014d070 table index 8. */
+		/* Select BT.2020 HDR, BT.601 SD, or BT.709 HD YCbCr-to-RGB CSC matrix. */
+		const u8 *csc = hdr_bt2020 ? yuv_bt2020_to_rgb_full_csc :
+			(colorimetry == 1 ? yuv_bt601_to_rgb_full_csc :
+			 yuv_bt709_to_rgb_full_csc);
+
 		ret = gc570d_it68051_select_page(gc, 1);
 		if (ret)
 			goto out_restore_page;
 		for (i = 0; i < ARRAY_SIZE(yuv_bt2020_to_rgb_full_csc);
 		     i++) {
-			ret = gc570d_receiver_write8(
-				gc, bus, 0x70 + i,
-				yuv_bt2020_to_rgb_full_csc[i]);
+			ret = gc570d_receiver_write8(gc, bus, 0x70 + i, csc[i]);
 			if (ret)
 				goto out_restore_page;
 		}
