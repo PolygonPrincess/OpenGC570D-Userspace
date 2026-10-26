@@ -51,6 +51,7 @@ const struct file_operations __name ## _fops = {                    \
 
 
 extern bool auto_hdmi1;
+extern bool copy_edid;
 #define GC570D_BAR                0
 #define GC570D_EXPECTED_BAR_SIZE  SZ_512K
 
@@ -423,8 +424,8 @@ struct gc570d_dev {
 	struct delayed_work hdmi1_auto_work;
 	u8 hdmi1_auto_phase;
 	bool hdmi1_auto_ready;
-	bool suspended;
 	bool removing;
+	bool suspended;
 	struct led_classdev_mc led_mcdev;
 	struct mc_subled led_subleds[3];
 	struct mutex led_lock;

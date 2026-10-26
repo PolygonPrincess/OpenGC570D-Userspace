@@ -10,6 +10,11 @@ module_param(auto_hdmi1, bool, 0444);
 MODULE_PARM_DESC(auto_hdmi1,
 		 "initialize HDMI IN 1 and passthrough automatically (default: true)");
 
+bool copy_edid;
+module_param(copy_edid, bool, 0644);
+MODULE_PARM_DESC(copy_edid,
+		 "copy downstream HDMI OUT monitor EDID instead of internal 4K60 EDID (default: false)");
+
 static int gc570d_bridge_init(struct gc570d_dev *gc)
 {
 	/* Enter the same stopped state expected before the official driver initializes DMA. */
@@ -331,49 +336,80 @@ static void gc570d_hdmi1_auto_work(struct work_struct *work)
 		break;
 	case GC570D_HDMI1_AUTO_SOURCE:
 		ret = gc570d_splitter_source_power_event(gc, true);
-		if (!ret)
+		if (!ret || ret == -ENODATA || ret == -ENOLINK) {
+			ret = 0;
 			gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_HDCP_OFF;
+		}
 		break;
 	case GC570D_HDMI1_AUTO_HDCP_OFF:
 		ret = gc570d_splitter_windows_receiver_hdcp_off(gc);
 		if (!ret) {
 			gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_MAIN_TIMER;
-			next_delay = msecs_to_jiffies(1000);
+			next_delay = msecs_to_jiffies(500);
 		}
 		break;
 	case GC570D_HDMI1_AUTO_MAIN_TIMER:
 		ret = gc570d_splitter_main_timer_irq(gc);
-		if (!ret)
+		if (!ret || ret == -ENODATA) {
+			ret = 0;
 			gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_CONNECT;
+		}
 		break;
 	case GC570D_HDMI1_AUTO_CONNECT:
-		ret = gc570d_splitter_windows_channel2_connect(gc, true);
-		if (!ret) {
+		ret = gc570d_splitter_windows_channel2_connect(gc, !copy_edid);
+		if (!ret || ret == -ENOLINK || ret == -ENODATA) {
+			ret = 0;
 			gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_RECEIVER_EVENT;
-			next_delay = msecs_to_jiffies(3000);
+			next_delay = msecs_to_jiffies(1500);
 		}
 		break;
 	case GC570D_HDMI1_AUTO_RECEIVER_EVENT:
 		ret = gc570d_splitter_source_power_event(gc, true);
 		if (!ret) {
+			gc->splitter_eq_retry = 0;
 			gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_POST_TIMER;
-			next_delay = msecs_to_jiffies(3000);
+			next_delay = msecs_to_jiffies(1500);
+		} else if ((ret == -ENODATA || ret == -ENOLINK) &&
+			   (gc->splitter_video_stable_pending ||
+			    ++gc->splitter_eq_retry >= 4)) {
+			gc->splitter_eq_retry = 0;
+			ret = 0;
+			gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_POST_TIMER;
+			next_delay = msecs_to_jiffies(200);
 		}
 		break;
 	case GC570D_HDMI1_AUTO_POST_TIMER:
 		ret = gc570d_splitter_main_timer_irq(gc);
-		if (!ret)
+		if (!ret || ret == -ENODATA) {
+			ret = 0;
 			gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_STABLE_IRQ;
+		}
 		break;
 	case GC570D_HDMI1_AUTO_STABLE_IRQ:
 		ret = gc570d_splitter_channel_video_stable_irq(gc);
-		if (!ret)
+		if (ret == -ENOLINK || ret == -ENODATA ||
+		    (ret == -EAGAIN && ++gc->splitter_eq_retry >= 3)) {
+			gc->splitter_eq_retry = 0;
+			dev_info(&gc->pdev->dev,
+				 "No passthrough sink stable yet; starting state pump for standalone HDMI IN 1 capture\n");
+			gc->hdmi1_auto_phase = gc->splitter_video_stable_pending ?
+				GC570D_HDMI1_AUTO_WORKERS : GC570D_HDMI1_AUTO_PUMP;
+			ret = 0;
+		} else if (!ret || ret == -EALREADY) {
+			gc->splitter_eq_retry = 0;
+			ret = 0;
 			gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_WORKER_PROBE;
+		}
 		break;
 	case GC570D_HDMI1_AUTO_WORKER_PROBE:
 		ret = gc570d_splitter_stable_worker_probe(gc);
-		if (!ret)
+		if (ret == -ENOLINK || ret == -ENODATA) {
+			gc->hdmi1_auto_phase = gc->splitter_video_stable_pending ?
+				GC570D_HDMI1_AUTO_WORKERS : GC570D_HDMI1_AUTO_PUMP;
+			ret = 0;
+		} else if (!ret) {
 			gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_WORKERS;
+		}
 		break;
 	case GC570D_HDMI1_AUTO_WORKERS:
 		ret = gc570d_splitter_stable_workers_windows_order(gc);
@@ -385,7 +421,9 @@ static void gc570d_hdmi1_auto_work(struct work_struct *work)
 		if (!ret || ret == -EALREADY) {
 			ret = 0;
 			gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_READY;
-			gc->hdmi1_auto_ready = true;
+			WRITE_ONCE(gc->hdmi1_auto_ready, true);
+			wake_up_interruptible(&gc->video0_wait);
+			wake_up_interruptible(&gc->audio0_wait);
 			dev_info(&gc->pdev->dev,
 				 "HDMI IN 1 and passthrough automatic initialization completed\n");
 		}
@@ -909,6 +947,29 @@ static int gc570d_probe(struct pci_dev *pdev,
 	return 0;
 }
 
+static void gc570d_remove(struct pci_dev *pdev)
+{
+	struct gc570d_dev *gc = pci_get_drvdata(pdev);
+
+	WRITE_ONCE(gc->removing, true);
+	cancel_delayed_work_sync(&gc->hdmi1_auto_work);
+	gc570d_splitter_windows_state_pump_stop(gc);
+	if (!IS_ERR_OR_NULL(gc->debugfs_dir))
+		debugfs_remove_recursive(gc->debugfs_dir);
+	gc570d_led_unregister(gc);
+	if (gc->audio_card)
+		snd_card_disconnect(gc->audio_card);
+	video_unregister_device(&gc->video0_dev);
+	video_unregister_device(&gc->video_dev);
+	v4l2_device_unregister(&gc->v4l2_dev);
+	free_irq(gc->irq, gc);
+	pci_free_irq_vectors(pdev);
+	vfree(gc->capture_data);
+	vfree(gc->audio_capture_data);
+	vfree(gc->audio0_capture_data);
+	dev_info(&pdev->dev, "diagnostic probe removed\n");
+}
+
 static void gc570d_reset_resume_state(struct gc570d_dev *gc)
 {
 	gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_RECEIVER;
@@ -943,7 +1004,7 @@ static int gc570d_suspend(struct device *dev)
 	    gc->audio_prepared || gc->audio0_prepared ||
 	    gc->video_irq_users) {
 		dev_warn(dev,
-			 "system suspend refused while a video or audio capture stream is active\n");
+			"system suspend refused while a video or audio capture stream is active\n");
 		mutex_unlock(&gc->capture_lock);
 		return -EBUSY;
 	}
@@ -984,7 +1045,7 @@ static int gc570d_resume(struct device *dev)
 	if (ret) {
 		mutex_unlock(&gc->capture_lock);
 		return dev_err_probe(dev, ret,
-				     "failed to reinitialize capture hardware after system resume\n");
+			"failed to reinitialize capture hardware after system resume\n");
 	}
 	WRITE_ONCE(gc->suspended, false);
 	mutex_unlock(&gc->capture_lock);
@@ -992,40 +1053,17 @@ static int gc570d_resume(struct device *dev)
 	led_ret = gc570d_led_resume(gc);
 	if (led_ret)
 		dev_warn(dev, "RGB restore after system resume failed: %d\n",
-			 led_ret);
+			led_ret);
+
 	if (auto_hdmi1)
 		schedule_delayed_work(&gc->hdmi1_auto_work, 0);
 
 	dev_info(dev,
-		 "capture hardware reinitialized after system resume; HDMI inputs are renegotiating\n");
+		"capture hardware reinitialized after system resume; HDMI inputs are renegotiating\n");
 	return 0;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(gc570d_pm_ops, gc570d_suspend,
-				gc570d_resume);
-
-static void gc570d_remove(struct pci_dev *pdev)
-{
-	struct gc570d_dev *gc = pci_get_drvdata(pdev);
-
-	WRITE_ONCE(gc->removing, true);
-	cancel_delayed_work_sync(&gc->hdmi1_auto_work);
-	gc570d_splitter_windows_state_pump_stop(gc);
-	if (!IS_ERR_OR_NULL(gc->debugfs_dir))
-		debugfs_remove_recursive(gc->debugfs_dir);
-	gc570d_led_unregister(gc);
-	if (gc->audio_card)
-		snd_card_disconnect(gc->audio_card);
-	video_unregister_device(&gc->video0_dev);
-	video_unregister_device(&gc->video_dev);
-	v4l2_device_unregister(&gc->v4l2_dev);
-	free_irq(gc->irq, gc);
-	pci_free_irq_vectors(pdev);
-	vfree(gc->capture_data);
-	vfree(gc->audio_capture_data);
-	vfree(gc->audio0_capture_data);
-	dev_info(&pdev->dev, "diagnostic probe removed\n");
-}
+static DEFINE_SIMPLE_DEV_PM_OPS(gc570d_pm_ops, gc570d_suspend, gc570d_resume);
 
 static const struct pci_device_id gc570d_pci_ids[] = {
 	{

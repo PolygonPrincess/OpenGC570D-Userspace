@@ -794,6 +794,8 @@ int gc570d_splitter_post_reset_init(struct gc570d_dev *gc)
 			SPLITTER_POST_UPDATE("caof-restart-clear", 0x2a,
 					     0x40, 0x00);
 		}
+		/* FIX: Prevent tight infinite looping timeout hardware race conditions */
+		msleep(10);
 	}
 	caof_value = value;
 	if (!(value & 0x30)) {
@@ -1394,11 +1396,11 @@ static int gc570d_splitter_aux_port_setup(struct gc570d_dev *gc, u8 port)
 	ret = gc570d_splitter_aux_update8(gc, port, 0x01, 0x20, 0x00);
 	if (ret)
 		return ret;
-	ret = gc570d_i2c_write8(gc, &gc570d_splitter_bus, 0x58, 0x0c,
-				 1U << (port + 4));
+	ret = gc570d_splitter_update8(gc, 0x58, 0x0c, 1U << (port + 4),
+				       1U << (port + 4));
 	if (ret)
 		return ret;
-	ret = gc570d_i2c_write8(gc, &gc570d_splitter_bus, 0x58, 0x0c, 0x00);
+	ret = gc570d_splitter_update8(gc, 0x58, 0x0c, 1U << (port + 4), 0x00);
 	if (ret)
 		return ret;
 	ret = gc570d_splitter_aux_update8(gc, port, 0x18, 0x80, 0x00);
@@ -2489,7 +2491,21 @@ int gc570d_splitter_source_power_event(struct gc570d_dev *gc,
 	 * live 0x03 snapshot must not be rejected merely because it also carries
 	 * that no-op bit 0.
 	 */
-	if (!(irq_values[0] & 0x7f) || (irq_values[0] & 0x80) ||
+	/* If the source was already connected before IRQ latches were cleared,
+	 * synthesize the initial power/clock/SCDT flags from live status 0x13/0x19.
+	 */
+	if (!(irq_values[0] & 0x7f) && !(irq_values[5] & 0x06) &&
+	    !gc->splitter_pclk[1] && (irq_values[8] & 0x01)) {
+		irq_values[0] |= 0x01;
+		if (irq_values[8] & 0x08)
+			irq_values[0] |= 0x04;
+		if ((irq_values[8] & 0x10) && (irq_values[11] & 0x80))
+			irq_values[5] |= 0x02;
+	}
+
+	if ((!(irq_values[0] & 0x7f) &&
+	     !((irq_values[5] & 0x06) && (irq_values[8] & 0x10))) ||
+	    (irq_values[0] & 0x80) ||
 	    (irq_values[2] & ~0x07) ||
 	    !(irq_values[8] & 0x01) ||
 	    ((irq_values[5] & 0x02) && !(irq_values[11] & 0x80))) {
@@ -2870,9 +2886,19 @@ handle_symbol_irq:
 		ret = -EILSEQ;
 		goto out;
 	}
+	if (irq_values[0] & BIT(0)) {
+		for (port = 0; port < 4; port++) {
+			gc->splitter_pclk[port] = 0;
+			gc->splitter_vclk[port] = 0;
+		}
+	}
+	if (scdt_ports)
+		gc->splitter_channel_active_mask |= scdt_ports;
 	for (port = 0; port < 4; port++) {
-		gc->splitter_pclk[port] = pclk[port];
-		gc->splitter_vclk[port] = vclk[port];
+		if (scdt_ports & BIT(port)) {
+			gc->splitter_pclk[port] = pclk[port];
+			gc->splitter_vclk[port] = vclk[port];
+		}
 	}
 
 	dev_info(&gc->pdev->dev,
@@ -3423,10 +3449,7 @@ static const u8 gc570d_splitter_windows_edid[256] = {
  * real sources such as the PS5 report for 2160p60 HDR.  Input-format and link
  * handling belongs in the driver implementation, not in an EDID restriction.
  */
-static void gc570d_splitter_build_bridge_edid(u8 *edid)
-{
-	memcpy(edid, gc570d_it68051_edid, 256);
-}
+
 
 static int
 gc570d_splitter_windows_hpd(struct gc570d_dev *gc, bool high,
@@ -3444,8 +3467,6 @@ gc570d_splitter_windows_hpd(struct gc570d_dev *gc, bool high,
 				       &source13, &last_irq, &last_status);
 		if (ret)
 			return ret;
-		if (!(source13 & BIT(0)))
-			return -ENOLINK;
 	}
 
 	*stage = high ? "hpd-high-bank-3" : "hpd-low-bank-3";
@@ -3672,8 +3693,7 @@ static int gc570d_splitter_cta_physical_address(const u8 *cta,
 static int gc570d_splitter_windows_edid_publish(struct gc570d_dev *gc,
 						 bool bridge_default)
 {
-	u8 live_edid[4][128];
-	u8 bridge_edid[256];
+	u8 *live_buf = NULL;
 	const u8 *publish_edid = gc570d_splitter_windows_edid;
 	u8 checksum[2] = { 0 };
 	u8 initial_bank = 0;
@@ -3709,8 +3729,7 @@ static int gc570d_splitter_windows_edid_publish(struct gc570d_dev *gc,
 	}
 	port = presence_mask & BIT(2) ? 2 : 1;
 	if (bridge_default) {
-		gc570d_splitter_build_bridge_edid(bridge_edid);
-		publish_edid = bridge_edid;
+		publish_edid = gc570d_it68051_edid;
 		/* The official driver caches the HDMI VSDB physical address and
 		 * The official driver publishes those bytes through detail c7/c8 before
 		 * loading the EDID RAM.  The bridge-limited profile preserves the
@@ -3725,39 +3744,74 @@ static int gc570d_splitter_windows_edid_publish(struct gc570d_dev *gc,
 	}
 
 	if (port == 2 && !bridge_default) {
-		stage = "read-live-edid";
-		for (block = 0; block < ARRAY_SIZE(live_edid); block++) {
+		u8 block_count;
+		u8 *cta_blk = NULL;
+
+		live_buf = kzalloc(512, GFP_KERNEL);
+		if (!live_buf) {
+			ret = -ENOMEM;
+			goto out;
+		}
+		stage = "read-live-edid-base";
+		ret = gc570d_splitter_read_downstream_edid(gc, port, 0,
+							   live_buf);
+		if (ret)
+			goto out;
+		checksum[0] = 0;
+		for (i = 0; i < 128; i++)
+			checksum[0] += live_buf[i];
+		if (memcmp(live_buf,
+			   "\x00\xff\xff\xff\xff\xff\xff\x00", 8) ||
+		    checksum[0] || !live_buf[0x7e]) {
+			ret = -EILSEQ;
+			goto out;
+		}
+
+		block_count = min_t(u8, live_buf[0x7e] + 1, 4);
+		stage = "read-live-edid-extensions";
+		for (block = 1; block < block_count; block++) {
+			u8 *blk = live_buf + block * 128;
+
 			ret = gc570d_splitter_read_downstream_edid(gc, port,
-							       block,
-							       live_edid[block]);
+							       block, blk);
 			if (ret)
 				goto out;
-			checksum[block != 0] = 0;
-			for (i = 0; i < sizeof(live_edid[block]); i++)
-				checksum[block != 0] += live_edid[block][i];
-			if (checksum[block != 0]) {
+			checksum[1] = 0;
+			for (i = 0; i < 128; i++)
+				checksum[1] += blk[i];
+			if (checksum[1]) {
 				ret = -EILSEQ;
 				goto out;
 			}
+			if (!cta_blk && blk[0] == 0x02)
+				cta_blk = blk;
 		}
-		if (memcmp(live_edid[0],
-			   "\x00\xff\xff\xff\xff\xff\xff\x00", 8) ||
-		    live_edid[0][0x7e] != 3 || live_edid[1][0] != 0xf0 ||
-		    live_edid[2][0] != 0x02 || live_edid[3][0] != 0x70) {
+		if (!cta_blk) {
 			ret = -EILSEQ;
 			goto out;
 		}
 		stage = "parse-live-cta";
-		ret = gc570d_splitter_cta_physical_address(live_edid[2],
-							      &cache_c7,
-							      &cache_c8);
+		ret = gc570d_splitter_cta_physical_address(cta_blk,
+							   &cache_c7,
+							   &cache_c8);
 		if (ret)
 			goto out;
-		gc570d_splitter_windows_filter_cta(live_edid[1]);
-		live_edid[1][0x7f] = 0;
+		/*
+		 * If the monitor uses a 4-block EDID with an 0xf0 block map in
+		 * block 1, keep the original block-1 filter behavior; for
+		 * standard 2-block EDIDs (where block 1 is CTA-861), filter
+		 * block 1 directly so both 2-block and 4-block displays work.
+		 *
+		 * publish_edid is consumed below as a flat 256-byte buffer
+		 * (indices 0..0xff).  live_edid[0] is only a 128-byte row,
+		 * so copy the two edited blocks into a flat staging buffer
+		 * to avoid an out-of-bounds access through the row pointer.
+		 */
+		gc570d_splitter_windows_filter_cta(live_buf + 128);
+		live_buf[128 + 0x7f] = 0;
 		for (i = 0; i < 127; i++)
-			live_edid[1][0x7f] -= live_edid[1][i];
-		publish_edid = live_edid[0];
+			live_buf[128 + 0x7f] -= live_buf[128 + i];
+		publish_edid = live_buf;
 	}
 
 	stage = "validate-edid";
@@ -3936,6 +3990,7 @@ static int gc570d_splitter_windows_edid_publish(struct gc570d_dev *gc,
 		 port, presence_mask, publish_edid[0x7f], publish_edid[0xff],
 		 cache_c7, cache_c8, verify_main0f, verify_main10, verify_c5,
 		 verify34);
+	kfree(live_buf);
 	return 0;
 
 out_restore_bank:
@@ -3943,6 +3998,7 @@ out_restore_bank:
 	if (!ret)
 		ret = cleanup_ret;
 out:
+	kfree(live_buf);
 	dev_err(&gc->pdev->dev,
 		"VideoSplitter official-driver %s EDID publication failed at %s: %d presence_mask=%02x aux03=%02x/%02x irq=0x%08x status=0x%08x\n",
 		bridge_default ? "bridge-limited 4K420 profile" : "Copy_Mode",
@@ -4036,12 +4092,17 @@ gc570d_splitter_windows_channel2_connect(struct gc570d_dev *gc,
 	static const u8 irq_regs[] = { 0x10, 0x11, 0x12, 0x13, 0x14 };
 	static const u8 verify_regs[] = { 0x03, 0xc1, 0x86, 0x84, 0x88, 0x19 };
 	u8 irq_values[ARRAY_SIZE(irq_regs)] = { 0 };
+	u8 port1_irqs[ARRAY_SIZE(irq_regs)] = { 0 };
 	u8 verify[ARRAY_SIZE(verify_regs)] = { 0 };
 	u8 main_snapshot = 0;
 	u8 final_main05 = 0;
+	u8 aux03_port1 = 0;
 	u8 aux03_hpd = 0;
 	u8 aux03_rxsense = 0;
 	u8 stable_mask = 0;
+	u8 detail13 = 0;
+	u8 target_port = 2;
+	u8 target_slave = 0x6c;
 	u32 last_irq = 0;
 	u32 last_status = 0;
 	const char *stage = "read-main-status";
@@ -4052,77 +4113,180 @@ gc570d_splitter_windows_channel2_connect(struct gc570d_dev *gc,
 			       &main_snapshot, &last_irq, &last_status);
 	if (ret)
 		goto out;
-	if (!(main_snapshot & BIT(2))) {
-		ret = -ENODATA;
+
+	stage = "read-port-presence";
+	ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6a, 0x03,
+			       &aux03_port1, &last_irq, &last_status);
+	if (ret)
 		goto out;
-	}
-
-	stage = "read-channel-irq";
-	for (i = 0; i < ARRAY_SIZE(irq_regs); i++) {
-		ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6c,
-				       irq_regs[i], &irq_values[i],
-				       &last_irq, &last_status);
-		if (ret)
-			goto out;
-	}
-	if ((irq_values[0] & 0x03) != 0x03 ||
-	    (irq_values[0] & ~0x83) || irq_values[1] || irq_values[2] ||
-	    irq_values[3] || irq_values[4]) {
-		ret = -ENODATA;
-		goto out;
-	}
-
-	stage = "ack-channel-irq";
-	for (i = 0; i < ARRAY_SIZE(irq_regs); i++) {
-		ret = gc570d_i2c_write8(gc, &gc570d_splitter_bus, 0x6c,
-					irq_regs[i], irq_values[i]);
-		if (ret)
-			goto out;
-	}
-
-	/* IRQ10 bit 0: downstream HPD ON, upstream HPD high, then the
-	 * synchronous the official driver EDID dispatcher on fresh software state.
-	 */
-	stage = "hpd-read-presence";
 	ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6c, 0x03,
 			       &aux03_hpd, &last_irq, &last_status);
 	if (ret)
 		goto out;
-	if (!(aux03_hpd & BIT(0))) {
-		ret = -ENOLINK;
-		goto out;
+
+	/* Relaxed check: Trigger if either HPD or RxSense fires */
+	/* Always drain pending IRQ bytes on port 2 if main05 BIT(2) is set. */
+	if (main_snapshot & BIT(2)) {
+		stage = "read-port2-irq";
+		for (i = 0; i < ARRAY_SIZE(irq_regs); i++) {
+			ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6c,
+					       irq_regs[i], &irq_values[i],
+					       &last_irq, &last_status);
+			if (ret)
+				goto out;
+		}
+		stage = "ack-port2-irq";
+		for (i = 0; i < ARRAY_SIZE(irq_regs); i++) {
+			if (!irq_values[i])
+				continue;
+			ret = gc570d_i2c_write8(gc, &gc570d_splitter_bus, 0x6c,
+						irq_regs[i], irq_values[i]);
+			if (ret)
+				goto out;
+		}
 	}
+
+	/*
+	 * If the external HDMI OUT display on port 2 (0x6c) is unplugged or
+	 * powered off ((aux03_hpd & 0x03) != 0x03), cleanly power down port 2.
+	 * If the internal bridge EDID is already published (0x70:0x34 BIT(0))
+	 * and copy_edid is not active, do NOT pulse upstream HPD or tear down
+	 * port 1 (0x6a, internal IT68051) so active HDMI IN 1 capture continues
+	 * uninterrupted when unplugging the passthrough monitor.
+	 */
+	if ((aux03_hpd & 0x03) != 0x03) {
+		u8 edid_ctrl = 0;
+
+		stage = "port2-disconnect-power-down";
+		ret = gc570d_splitter_aux_power_down(gc, 2);
+		if (ret)
+			goto out;
+		gc->splitter_channel_active_mask &= ~BIT(2);
+		gc->splitter_video_stable_mask &= ~BIT(2);
+		gc->splitter_worker_state4_mask &= ~BIT(2);
+		gc->splitter_pclk[2] = 0;
+		gc->splitter_vclk[2] = 0;
+
+		if (!(aux03_port1 & BIT(0))) {
+			ret = -ENOLINK;
+			goto out;
+		}
+		gc->splitter_channel_active_mask |= BIT(1);
+
+		ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x70, 0x34,
+				       &edid_ctrl, &last_irq, &last_status);
+		if (!ret && (edid_ctrl & BIT(0)) && bridge_default) {
+			u8 aux88_p1 = 0;
+			u8 auxc1_p1 = 0;
+
+			ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x70,
+					       0x13, &detail13, &last_irq,
+					       &last_status);
+			gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6a, 0x88,
+					 &aux88_p1, &last_irq, &last_status);
+			gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6a, 0xc1,
+					 &auxc1_p1, &last_irq, &last_status);
+			if (!ret && (detail13 & BIT(4)) &&
+			    ((aux03_port1 & 0x85) != 0x85 ||
+			     (aux88_p1 & 0x03) != 0x00 ||
+			     (auxc1_p1 & BIT(0)))) {
+				ret = gc570d_splitter_scdt_channel_setup(
+					gc, 1, &gc->splitter_pclk[1],
+					&gc->splitter_vclk[1]);
+				if (!ret) {
+					gc->splitter_video_stable_pending = true;
+					gc->splitter_video_stable_mask |= BIT(1);
+				}
+			}
+			dev_info(&gc->pdev->dev,
+				 "VideoSplitter port-2 disconnect handled: port1_03=%02x port1_88=%02x port1_c1=%02x detail13=%02x capture_preserved=yes\n",
+				 aux03_port1, aux88_p1, auxc1_p1, detail13);
+			return 0;
+		}
+
+		target_port = 1;
+		target_slave = 0x6a;
+		bridge_default = true;
+	}
+
+	if (target_port == 1 && (main_snapshot & BIT(1))) {
+		stage = "read-port1-irq";
+		for (i = 0; i < ARRAY_SIZE(irq_regs); i++) {
+			ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6a,
+					       irq_regs[i], &port1_irqs[i],
+					       &last_irq, &last_status);
+			if (ret)
+				goto out;
+		}
+		stage = "ack-port1-irq";
+		for (i = 0; i < ARRAY_SIZE(irq_regs); i++) {
+			if (!port1_irqs[i])
+				continue;
+			ret = gc570d_i2c_write8(gc, &gc570d_splitter_bus, 0x6a,
+						irq_regs[i], port1_irqs[i]);
+			if (ret)
+				goto out;
+		}
+	}
+
 	stage = "hpd-upstream-high";
 	ret = gc570d_splitter_windows_hpd(gc, true, &stage);
 	if (ret)
 		goto out;
+
 	stage = bridge_default ? "bridge-edid-dispatch" :
 				 "copy-edid-dispatch";
 	ret = gc570d_splitter_windows_edid_publish(gc, bridge_default);
-	if (ret)
-		goto out;
+	if (ret) {
+		/* If Copy_Mode fails because the monitor was unplugged mid-read,
+		 * fall back to the internal 4K60 bridge EDID for port 1.
+		 */
+		if (!bridge_default && (aux03_port1 & BIT(0))) {
+			bridge_default = true;
+			target_port = 1;
+			target_slave = 0x6a;
+			ret = gc570d_splitter_windows_edid_publish(gc, true);
+		}
+		if (ret)
+			goto out;
+	}
 
-	/* IRQ10 bit 1: the EDID dispatcher has established presence. The official driver
-	 * powers the transmitter down, applies only the common half of
-	 * common power-up sequence (SCDT software state is not set yet), then raises HPD.
-	 */
 	stage = "rxsense-read-presence";
-	ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6c, 0x03,
+	ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, target_slave, 0x03,
 			       &aux03_rxsense, &last_irq, &last_status);
 	if (ret)
 		goto out;
-	if (!(aux03_rxsense & BIT(1))) {
+	if (target_port == 2 && !(aux03_rxsense & BIT(1))) {
+		/* Monitor lost RxSense during EDID publish; fall back to port 1. */
+		ret = gc570d_splitter_aux_power_down(gc, 2);
+		if (ret)
+			goto out;
+		gc->splitter_channel_active_mask &= ~BIT(2);
+		gc->splitter_video_stable_mask &= ~BIT(2);
+		gc->splitter_worker_state4_mask &= ~BIT(2);
+		target_port = 1;
+		target_slave = 0x6a;
+		ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, target_slave,
+				       0x03, &aux03_rxsense, &last_irq,
+				       &last_status);
+		if (ret)
+			goto out;
+	}
+	if (!(aux03_rxsense & BIT(0))) {
 		ret = -ENOLINK;
 		goto out;
 	}
+
 	stage = "rxsense-power-down";
-	ret = gc570d_splitter_aux_power_down(gc, 2);
+	ret = gc570d_splitter_aux_power_down(gc, target_port);
 	if (ret)
 		goto out;
+
 	stage = "rxsense-power-up-common";
-	ret = gc570d_splitter_aux_power_up_common(gc, 2);
+	ret = gc570d_splitter_aux_power_up_common(gc, target_port);
 	if (ret)
 		goto out;
+
 	stage = "rxsense-upstream-hpd-high";
 	ret = gc570d_splitter_windows_hpd(gc, true, &stage);
 	if (ret)
@@ -4130,49 +4294,81 @@ gc570d_splitter_windows_channel2_connect(struct gc570d_dev *gc,
 
 	stage = "verify-channel";
 	for (i = 0; i < ARRAY_SIZE(verify_regs); i++) {
-		ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6c,
+		ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, target_slave,
 				       verify_regs[i], &verify[i],
 				       &last_irq, &last_status);
 		if (ret)
 			goto out;
 	}
-	if ((verify[0] & 0x03) != 0x03 || !(verify[2] & 0x08) ||
+	if (!(verify[2] & 0x08) ||
 	    (verify[3] & 0xe0) != 0x80 || (verify[4] & 0x03) != 0x01 ||
 	    (verify[5] & 0x07) != 0x07) {
 		ret = -EILSEQ;
 		goto out;
 	}
+
 	ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x58, 0x05,
 			       &final_main05, &last_irq, &last_status);
 	if (ret)
 		goto out;
 
-	/* IRQ10 bit 7 only promotes the official driver software state when the
-	 * receiver/SCDT path has already measured this output.  A stale stable
-	 * bit bundled with the first HPD/RxSense interrupt must wait for the
-	 * later receiver event and its dedicated Video Stable dispatch.
+	/*
+	 * Read the receiver status to see if the upstream source is already active.
+	 * If the source is active (detail13 bit 4 is set), we MUST force the stable_mask
+	 * so that the output worker runs immediately and establishes the downstream link.
+	 * Without this, plugging in a monitor while the console is running results in
+	 * no passthrough output because vclk remains uninitialized.
+	 *
+	 * When the console does not drop TMDS clock during the HPD pulse,
+	 * source_power_event() will not fire a new SCDT event, so run
+	 * scdt_channel_setup() directly on the newly powered port(s) before
+	 * arming the Video-Stable output workers.
 	 */
-	if ((irq_values[0] & BIT(7)) && gc->splitter_vclk[2])
-		stable_mask = BIT(2);
+	gc->video0_receiver_output_valid = false;
+	stage = "check-upstream-video-stable";
+	ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x70, 0x13,
+			       &detail13, &last_irq, &last_status);
+	if (!ret && (detail13 & BIT(4))) {
+		if (aux03_port1 & BIT(0)) {
+			(void)gc570d_splitter_scdt_channel_setup(
+				gc, 1, &gc->splitter_pclk[1],
+				&gc->splitter_vclk[1]);
+			stable_mask |= BIT(1);
+		}
+		if (target_port == 2) {
+			(void)gc570d_splitter_scdt_channel_setup(
+				gc, 2, &gc->splitter_pclk[2],
+				&gc->splitter_vclk[2]);
+		}
+		stable_mask |= BIT(target_port);
+	}
+
 	gc->splitter_main_timer_serviced = false;
-	gc->splitter_channel_active_mask = BIT(2);
-	gc->splitter_video_stable_pending = stable_mask != 0;
-	gc->splitter_video_stable_mask = stable_mask;
+	gc->splitter_channel_active_mask |= BIT(target_port);
+	if (aux03_port1 & BIT(0))
+		gc->splitter_channel_active_mask |= BIT(1);
+	if (stable_mask) {
+		gc->splitter_video_stable_pending = true;
+		gc->splitter_video_stable_mask |= stable_mask;
+	}
+
 	dev_info(&gc->pdev->dev,
-		 "VideoSplitter official-driver port-2 connect completed: profile=%s main05=%02x irq=%02x/%02x/%02x/%02x/%02x hpd03=%02x rxsense03=%02x final main05=%02x verify=%02x/%02x/%02x/%02x/%02x/%02x worker_pending=%s\n",
-		 bridge_default ? "bridge-limited" : "copy", main_snapshot,
-		 irq_values[0], irq_values[1], irq_values[2], irq_values[3],
-		 irq_values[4], aux03_hpd, aux03_rxsense, final_main05,
-		 verify[0], verify[1], verify[2], verify[3], verify[4],
-		 verify[5], stable_mask ? "yes" : "no");
+		 "VideoSplitter port-%u connect completed: profile=%s main05=%02x irq=%02x/%02x/%02x/%02x/%02x port1_03=%02x port2_03=%02x rxsense03=%02x final main05=%02x verify=%02x/%02x/%02x/%02x/%02x/%02x worker_pending=%s\n",
+		 target_port, bridge_default ? "bridge-limited" : "copy",
+		 main_snapshot, irq_values[0], irq_values[1], irq_values[2],
+		 irq_values[3], irq_values[4], aux03_port1, aux03_hpd,
+		 aux03_rxsense, final_main05, verify[0], verify[1], verify[2],
+		 verify[3], verify[4], verify[5],
+		 stable_mask ? "yes" : "no");
 	return 0;
 
 out:
 	dev_err(&gc->pdev->dev,
-		"VideoSplitter official-driver port-2 connect failed at %s: %d profile=%s main05=%02x irq=%02x/%02x/%02x/%02x/%02x hpd03=%02x rxsense03=%02x irq_status=0x%08x status=0x%08x\n",
-		stage, ret, bridge_default ? "bridge-limited" : "copy",
-		main_snapshot, irq_values[0], irq_values[1], irq_values[2],
-		irq_values[3], irq_values[4], aux03_hpd, aux03_rxsense,
+		"VideoSplitter port-%u connect failed at %s: %d profile=%s main05=%02x irq=%02x/%02x/%02x/%02x/%02x port1_03=%02x port2_03=%02x rxsense03=%02x irq_status=0x%08x status=0x%08x\n",
+		target_port, stage, ret,
+		bridge_default ? "bridge-limited" : "copy", main_snapshot,
+		irq_values[0], irq_values[1], irq_values[2], irq_values[3],
+		irq_values[4], aux03_port1, aux03_hpd, aux03_rxsense,
 		last_irq, last_status);
 	return ret;
 }
@@ -4300,7 +4496,11 @@ static int gc570d_splitter_channel_irq_on_mask(struct gc570d_dev *gc,
 		 * A newly attached live source therefore commonly reports 0x83;
 		 * it is not a separate or stale interrupt.
 		 */
-		if ((irq_values[index][0] & 0x03) != 0x03 ||
+		if (!irq_values[index][0] && !irq_values[index][1] &&
+		    !irq_values[index][2] && !irq_values[index][3] &&
+		    !irq_values[index][4])
+			continue;
+		if (!(irq_values[index][0] & 0x03) ||
 		    (irq_values[index][0] & ~0x83) || irq_values[index][1] ||
 		    irq_values[index][2] || irq_values[index][3] ||
 		    irq_values[index][4]) {
@@ -4653,13 +4853,14 @@ int gc570d_splitter_main_timer_irq(struct gc570d_dev *gc)
 		ret = -EILSEQ;
 		goto out;
 	}
+	if (!gc->splitter_main_timer_serviced) {
+		dev_info(&gc->pdev->dev,
+			 "VideoSplitter main timer IRQs handled: main=%02x/%02x/%02x page1=%02x/%02x/%02x detail13=%02x detail14=%02x e5=%02x final=%02x/%02x/%02x\n",
+			 main05, main06, main07, page1_values[0], page1_values[1],
+			 page1_values[2], detail13, detail14, detail_e5, final05,
+			 final06, final07);
+	}
 	gc->splitter_main_timer_serviced = true;
-
-	dev_info(&gc->pdev->dev,
-		 "VideoSplitter main timer IRQs handled: main=%02x/%02x/%02x page1=%02x/%02x/%02x detail13=%02x detail14=%02x e5=%02x final=%02x/%02x/%02x\n",
-		 main05, main06, main07, page1_values[0], page1_values[1],
-		 page1_values[2], detail13, detail14, detail_e5, final05,
-		 final06, final07);
 	return 0;
 
 out:
@@ -4772,12 +4973,6 @@ int gc570d_splitter_channel_video_stable_irq(struct gc570d_dev *gc)
 		    !irq_values[index][2] && !irq_values[index][3] &&
 		    !irq_values[index][4])
 			continue;
-		if ((irq_values[index][0] & ~0x83) || irq_values[index][1] ||
-		    irq_values[index][2] || irq_values[index][3] ||
-		    irq_values[index][4]) {
-			ret = -ENODATA;
-			goto out;
-		}
 		acked_mask |= BIT(port);
 		if (!(irq_values[index][0] & BIT(7)))
 			continue;
@@ -4786,10 +4981,8 @@ int gc570d_splitter_channel_video_stable_irq(struct gc570d_dev *gc)
 		if (ret)
 			goto out;
 		if ((aux03[index] & (BIT(7) | BIT(2) | BIT(0))) !=
-		    (BIT(7) | BIT(2) | BIT(0))) {
-			ret = -ENOLINK;
-			goto out;
-		}
+		    (BIT(7) | BIT(2) | BIT(0)))
+			continue;
 		stable_mask |= BIT(port);
 	}
 
@@ -4847,6 +5040,15 @@ int gc570d_splitter_channel_video_stable_irq(struct gc570d_dev *gc)
 		ret = -EILSEQ;
 		goto out;
 	}
+	{
+		u8 p1_03 = 0;
+
+		if (!gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6a,
+				      0x03, &p1_03, &last_irq,
+				      &last_status) &&
+		    (p1_03 & 0x85) == 0x85)
+			stable_mask |= BIT(1);
+	}
 	new_stable_mask = stable_mask & ~gc->splitter_video_stable_mask;
 	if (new_stable_mask) {
 		gc->splitter_video_stable_pending = true;
@@ -4856,17 +5058,32 @@ int gc570d_splitter_channel_video_stable_irq(struct gc570d_dev *gc)
 	 * first stable 0->1 transition.  The link/analog sequence itself raises
 	 * another IRQ10.bit7; acknowledging that repeated level must not queue
 	 * The official driver again or the transmitter is reset forever.
+	 *
+	 * Wait for port 2 when a downstream monitor is present on port 2;
+	 * otherwise arm on port 1 for standalone capture.
 	 */
-	if (!(new_stable_mask & BIT(2))) {
-		gc->splitter_main_timer_serviced = false;
-		if (stable_mask & BIT(2)) {
-			dev_dbg(&gc->pdev->dev,
-				"VideoSplitter repeated port-2 Video Stable IRQ acknowledged without rearming worker\n");
-			return -EALREADY;
+	{
+		u8 port2_present = 0;
+		u8 required_bit = BIT(1);
+
+		if (!gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6c, 0x03,
+				      &port2_present, &last_irq, &last_status) &&
+		    (port2_present & 0x03) == 0x03)
+			required_bit = BIT(2);
+
+		if (!(new_stable_mask & required_bit)) {
+			gc->splitter_main_timer_serviced = false;
+			if ((stable_mask & required_bit) ||
+			    (gc->splitter_video_stable_mask & required_bit)) {
+				dev_dbg(&gc->pdev->dev,
+					"VideoSplitter repeated Video Stable IRQ (mask=%02x) acknowledged without rearming worker\n",
+					stable_mask);
+				return -EALREADY;
+			}
+			stage = "await-video-stable";
+			ret = -EAGAIN;
+			goto out;
 		}
-		stage = "await-port2-video-stable";
-		ret = -EAGAIN;
-		goto out;
 	}
 	gc->splitter_main_timer_serviced = false;
 
@@ -4881,15 +5098,28 @@ int gc570d_splitter_channel_video_stable_irq(struct gc570d_dev *gc)
 	return 0;
 
 out:
-	dev_err(&gc->pdev->dev,
-		"VideoSplitter Video Stable On IRQ failed at %s: %d main05=%02x active=%02x timer_serviced=%s detail13=%02x aux03=%02x/%02x irq1=%02x/%02x/%02x/%02x/%02x irq2=%02x/%02x/%02x/%02x/%02x\n",
-		stage, ret, main05, active_mask,
-		gc->splitter_main_timer_serviced ? "yes" : "no", detail13,
-		aux03[0], aux03[1],
-		irq_values[0][0], irq_values[0][1], irq_values[0][2],
-		irq_values[0][3], irq_values[0][4], irq_values[1][0],
-		irq_values[1][1], irq_values[1][2], irq_values[1][3],
-		irq_values[1][4]);
+	if (ret == -ENOLINK || ret == -ENODATA ||
+	    ret == -EAGAIN || ret == -EALREADY) {
+		dev_dbg(&gc->pdev->dev,
+			"VideoSplitter Video Stable On IRQ deferred at %s: %d main05=%02x active=%02x timer_serviced=%s detail13=%02x aux03=%02x/%02x irq1=%02x/%02x/%02x/%02x/%02x irq2=%02x/%02x/%02x/%02x/%02x\n",
+			stage, ret, main05, active_mask,
+			gc->splitter_main_timer_serviced ? "yes" : "no",
+			detail13, aux03[0], aux03[1],
+			irq_values[0][0], irq_values[0][1], irq_values[0][2],
+			irq_values[0][3], irq_values[0][4], irq_values[1][0],
+			irq_values[1][1], irq_values[1][2], irq_values[1][3],
+			irq_values[1][4]);
+	} else {
+		dev_warn_ratelimited(&gc->pdev->dev,
+			"VideoSplitter Video Stable On IRQ failed at %s: %d main05=%02x active=%02x timer_serviced=%s detail13=%02x aux03=%02x/%02x irq1=%02x/%02x/%02x/%02x/%02x irq2=%02x/%02x/%02x/%02x/%02x\n",
+			stage, ret, main05, active_mask,
+			gc->splitter_main_timer_serviced ? "yes" : "no",
+			detail13, aux03[0], aux03[1],
+			irq_values[0][0], irq_values[0][1], irq_values[0][2],
+			irq_values[0][3], irq_values[0][4], irq_values[1][0],
+			irq_values[1][1], irq_values[1][2], irq_values[1][3],
+			irq_values[1][4]);
+	}
 	return ret;
 }
 
@@ -4978,17 +5208,18 @@ int gc570d_splitter_stable_worker_probe(struct gc570d_dev *gc)
 	/* This entry point ports the port-2 invocation of the official driver.
 	 * The official driver invokes the worker once per output, so a simultaneously stable
 	 * port 1 is not an error and must not change the selected transmitter.
+	 * Fall back to port 1 only when port 2 has no downstream sink connected.
 	 */
-	if (!(live_mask & BIT(2))) {
+	if (!live_mask) {
 		ret = -ENODATA;
 		goto out;
 	}
+	selected_mask = (live_mask & BIT(2)) ? BIT(2) : BIT(1);
 	if (gc->splitter_video_stable_pending &&
-	    !(gc->splitter_video_stable_mask & BIT(2))) {
+	    !(gc->splitter_video_stable_mask & selected_mask)) {
 		ret = -ESTALE;
 		goto out;
 	}
-	selected_mask = BIT(2);
 	for (port = 1; port < 3; port++) {
 		if (selected_mask & BIT(port))
 			break;
@@ -6184,6 +6415,10 @@ gc570d_splitter_stable_worker_state4_followup(struct gc570d_dev *gc,
 	}
 
 	gc->splitter_worker_state4_mask &= ~completed_mask;
+	if (completed_mask & BIT(1)) {
+		gc->video0_receiver_output_valid = false;
+		(void)gc570d_it68051_video_output_on(gc);
+	}
 	dev_info(&gc->pdev->dev,
 		 "VideoSplitter official-driver worker state-4 follow-up completed: requested=%02x completed=%02x aux91=%02x/%02x auxc1=%02x/%02x content_release=yes\n",
 		 requested_mask, completed_mask, aux91[0], aux91[1],
@@ -6208,18 +6443,33 @@ out:
 int
 gc570d_splitter_stable_workers_windows_order(struct gc570d_dev *gc)
 {
-	u8 requested_mask = gc->splitter_video_stable_mask &
-			    (BIT(1) | BIT(2));
+	u8 requested_mask;
 	u8 completed_mask = 0;
+	u8 p1_03 = 0;
+	u32 last_irq = 0, last_status = 0;
 	u8 port;
 	int ret;
 
+	/* Always include Port 1 (internal capture leg to IT68051) if present */
+	if (!gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6a, 0x03,
+			      &p1_03, &last_irq, &last_status) &&
+	    (p1_03 & 0x01)) {
+		gc->splitter_video_stable_mask |= BIT(1);
+	}
+
+	requested_mask = gc->splitter_video_stable_mask & (BIT(1) | BIT(2));
 	if (!gc->splitter_video_stable_pending || !requested_mask)
 		return -ENODATA;
 
 	for (port = 1; port < 3; port++) {
 		if (!(requested_mask & BIT(port)))
 			continue;
+
+		if (!gc->splitter_pclk[port] || !gc->splitter_vclk[port]) {
+			(void)gc570d_splitter_scdt_channel_setup(
+				gc, port, &gc->splitter_pclk[port],
+				&gc->splitter_vclk[port]);
+		}
 
 		ret = gc570d_splitter_stable_worker_link_setup_port(gc, port);
 		if (ret)
@@ -6231,6 +6481,10 @@ gc570d_splitter_stable_workers_windows_order(struct gc570d_dev *gc)
 	}
 
 	gc->splitter_video_stable_pending = false;
+	if (gc->splitter_worker_state4_mask) {
+		(void)gc570d_splitter_stable_worker_state4_followup(
+			gc, gc->splitter_worker_state4_mask);
+	}
 	dev_info(&gc->pdev->dev,
 		 "VideoSplitter official-driver ordered stable workers completed: requested=%02x completed=%02x order=port1/port2 pending=no\n",
 		 requested_mask, completed_mask);
@@ -6322,6 +6576,35 @@ static int gc570d_splitter_windows_state_pump_once(struct gc570d_dev *gc)
 	}
 
 	if (main05 & (BIT(1) | BIT(2))) {
+		u8 irq10 = 0;
+
+		/* Intercept downstream HPD/RxSense hotplugs before Video Stable drops them */
+		if (main05 & BIT(2)) {
+			ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6c, 0x10,
+					       &irq10, &last_irq, &last_status);
+			if (!ret && (irq10 & 0x03)) {
+				ret = gc570d_splitter_windows_channel2_connect(gc, !copy_edid);
+				if (!ret)
+					events++;
+				else if (!first_error &&
+					 !gc570d_splitter_pump_transient_error(ret))
+					first_error = ret;
+			}
+		}
+		/* Also handle port 1 (internal IT68051) HPD/RxSense connect events */
+		if (main05 & BIT(1)) {
+			ret = gc570d_i2c_read8(gc, &gc570d_splitter_bus, 0x6a, 0x10,
+					       &irq10, &last_irq, &last_status);
+			if (!ret && (irq10 & 0x03)) {
+				ret = gc570d_splitter_channel1_irq_on(gc);
+				if (!ret)
+					events++;
+				else if (!first_error &&
+					 !gc570d_splitter_pump_transient_error(ret))
+					first_error = ret;
+			}
+		}
+
 		ret = gc570d_splitter_channel_video_stable_irq(gc);
 		if (!ret)
 			events++;
@@ -6365,6 +6648,8 @@ static int gc570d_splitter_windows_state_pump_once(struct gc570d_dev *gc)
 static int gc570d_splitter_windows_state_pump_thread(void *data)
 {
 	struct gc570d_dev *gc = data;
+	unsigned int idle_count = 0;
+	unsigned int sleep_ms;
 	int ret;
 
 	dev_info(&gc->pdev->dev,
@@ -6392,7 +6677,21 @@ static int gc570d_splitter_windows_state_pump_thread(void *data)
 		}
 		mutex_unlock(&gc->capture_lock);
 
-		if (msleep_interruptible(20) && kthread_should_stop())
+		/*
+		 * Back off when no hardware events are being processed.
+		 * gc570d_splitter_windows_state_pump_once returns 0 only when
+		 * at least one sub-handler succeeded; transient no-signal errors
+		 * (-ENOLINK, -ENODATA, -EAGAIN) return non-zero with no events
+		 * incremented.  Cap at 200 ms so a newly-plugged source is still
+		 * detected promptly.
+		 */
+		if (ret == 0)
+			idle_count = 0;
+		else
+			idle_count = min(idle_count + 1, 9u);
+		sleep_ms = (idle_count < 5) ? 20 : 200;
+
+		if (msleep_interruptible(sleep_ms) && kthread_should_stop())
 			break;
 	}
 	dev_info(&gc->pdev->dev,
@@ -6445,11 +6744,16 @@ gc570d_splitter_windows_state_pump_write(struct file *file,
 	ret = kstrtobool_from_user(buffer, count, &requested);
 	if (ret)
 		return ret;
+
 	if (!requested) {
 		gc570d_splitter_windows_state_pump_stop(gc);
 		return count;
 	}
+
+	mutex_lock(&gc->capture_lock);
 	ret = gc570d_splitter_windows_state_pump_start(gc);
+	mutex_unlock(&gc->capture_lock);
+
 	return ret ? ret : count;
 }
 
