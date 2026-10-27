@@ -157,6 +157,43 @@ the recovered HDMI IN 1/HDMI OUT sequence automatically in a background state
 machine. It waits and retries while the source or display is absent, and
 normally completes about ten seconds after both are available.
 
+## HDMI IN 1 hotplug policy
+
+The driver supports two startup hotplug policies for HDMI IN 1 and passthrough:
+
+- `preserve` (default): Prioritizes uninterrupted capture. Publishes the internal
+  4K60 bridge EDID at startup so HDMI IN 1 works standalone without an external
+  HDMI OUT monitor. When a monitor is connected or disconnected later, upstream
+  HPD is never pulsed and capture continues uninterrupted. If the monitor
+  supports the active source mode, passthrough displays immediately.
+- `renegotiate`: Prioritizes downstream monitor compatibility. If a monitor is
+  connected at startup, its EDID is read and published before upstream HPD is
+  raised for the first time, avoiding an unnecessary second negotiation. When a
+  monitor is connected later, the driver reads its EDID, publishes a compatible
+  two-block EDID, and deliberately pulses upstream HPD to renegotiate. Disconnecting
+  HDMI OUT does not pulse HPD or interrupt ongoing capture.
+
+The policy is selected at startup and remains read-only while the module is loaded.
+It can be configured in `/etc/gc570d/gc570d.conf` (installed by `install-portable.sh`):
+
+```sh
+HDMI1_HOTPLUG_POLICY="preserve"
+```
+
+Or via modprobe options (e.g. `/etc/modprobe.d/gc570d.conf`):
+
+```text
+options gc570d hdmi1_hotplug_policy=preserve
+```
+
+Or when running the loader manually:
+
+```sh
+sudo gc570d-load --policy=renegotiate
+# Or force-reload:
+sudo gc570d-load --reload --policy=preserve
+```
+
 For the most reliable resolution negotiation, connect and power the HDMI OUT
 display before connecting or powering the HDMI IN 1 source. This gives the
 source the downstream display capabilities during its initial HDMI/EDID

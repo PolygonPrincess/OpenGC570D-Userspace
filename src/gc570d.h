@@ -50,8 +50,13 @@ const struct file_operations __name ## _fops = {                    \
 #define GC570D_SUBSYSTEM_ID       0x5700
 
 
+enum gc570d_hdmi1_hotplug_policy {
+	GC570D_HOTPLUG_PRESERVE = 0,
+	GC570D_HOTPLUG_RENEGOTIATE = 1,
+};
+
 extern bool auto_hdmi1;
-extern bool copy_edid;
+extern enum gc570d_hdmi1_hotplug_policy hdmi1_hotplug_policy;
 #define GC570D_BAR                0
 #define GC570D_EXPECTED_BAR_SIZE  SZ_512K
 
@@ -331,6 +336,8 @@ struct gc570d_dev {
 	u32 video0_sequence;
 	u16 video0_width;
 	u16 video0_height;
+	u16 video0_dma_width;
+	u16 video0_dma_height;
 	u32 video0_frame_interval;
 	bool video0_receiver_output_valid;
 	u16 video0_receiver_width;
@@ -410,6 +417,7 @@ struct gc570d_dev {
 	bool splitter_video_stable_pending;
 	u8 splitter_channel_active_mask;
 	u8 splitter_video_stable_mask;
+	u8 splitter_worker_completed_mask;
 	u8 splitter_worker_state4_mask;
 	u8 splitter_eq_state;
 	u8 splitter_eq_retry;
@@ -424,6 +432,8 @@ struct gc570d_dev {
 	struct delayed_work hdmi1_auto_work;
 	u8 hdmi1_auto_phase;
 	bool hdmi1_auto_ready;
+	enum gc570d_hdmi1_hotplug_policy hdmi1_hotplug_policy;
+	bool splitter_edid_published;
 	bool removing;
 	bool suspended;
 	struct led_classdev_mc led_mcdev;
@@ -530,9 +540,11 @@ int gc570d_splitter_windows_receiver_hdcp_off(struct gc570d_dev *gc);
 int gc570d_splitter_windows_state_pump_start(struct gc570d_dev *gc);
 void gc570d_splitter_windows_state_pump_stop(struct gc570d_dev *gc);
 int gc570d_video0_register(struct gc570d_dev *gc);
+int gc570d_video0_switch_to_no_signal(struct gc570d_dev *gc);
 void gc570d_video_irq_get_locked(struct gc570d_dev *gc);
 void gc570d_video_irq_put_locked(struct gc570d_dev *gc);
 int gc570d_video_register(struct gc570d_dev *gc);
+int gc570d_video_switch_to_no_signal(struct gc570d_dev *gc);
 int gc570d_vip0_detect_signal(
 	struct gc570d_dev *gc, struct gc570d_video0_signal *signal);
 int gc570d_vip0_program_yuy2(

@@ -1740,6 +1740,7 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	u8 colorimetry;
 	u8 extended_colorimetry;
 	bool hdr_bt2020;
+	u8 reg19 = 0;
 	u8 c5;
 	u8 c6;
 	u8 avmute_packet;
@@ -1750,10 +1751,28 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	int restore_ret;
 	int ret;
 
+	if ((gc->hdmi1_auto_phase && !READ_ONCE(gc->hdmi1_auto_ready)) ||
+	    (READ_ONCE(gc->splitter_pump_thread) &&
+	     (gc->splitter_video_stable_pending ||
+	      !(gc->splitter_worker_completed_mask & BIT(1)) ||
+	      (gc->splitter_worker_state4_mask & BIT(1))))) {
+		WRITE_ONCE(gc->video0_receiver_output_valid, false);
+		return -ENOLINK;
+	}
+
 	/* The official driver: stable-state marker. */
 	ret = gc570d_it68051_select_page(gc, 0);
 	if (ret)
 		goto out_restore_page;
+	ret = gc570d_receiver_read8(gc, bus, 0x19, &reg19,
+				    &last_irq, &last_status);
+	if (ret)
+		goto out_restore_page;
+	if (!(reg19 & BIT(7))) {
+		WRITE_ONCE(gc->video0_receiver_output_valid, false);
+		ret = -ENOLINK;
+		goto out_restore_page;
+	}
 	ret = gc570d_receiver_write8(gc, bus, 0x90, 0x8f);
 	if (ret)
 		goto out_restore_page;
@@ -1792,7 +1811,8 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	dual_pixel = input_color == 3 || rx_timing.hactive > 1920 ||
 		(rx_timing.pixel_clock >= 150001 &&
 		 (rx_timing.hactive >= 1920 || rx_timing.vactive >= 2160));
-	if (gc->video0_receiver_output_valid &&
+	if (READ_ONCE(gc->video0_receiver_output_valid) &&
+	    rx_timing.hactive && rx_timing.vactive &&
 	    gc->video0_receiver_width == rx_timing.hactive &&
 	    gc->video0_receiver_height == rx_timing.vactive &&
 	    gc->video0_receiver_input_color == input_color &&
@@ -1807,6 +1827,12 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 			 dual_pixel ? "dual" : "single",
 			 rx_timing.pixel_clock);
 		goto out_restore_page;
+	}
+
+	WRITE_ONCE(gc->video0_receiver_output_valid, false);
+	if (READ_ONCE(gc->audio0_prepared) && READ_ONCE(gc->audio0_running)) {
+		WRITE_ONCE(gc->audio0_recovering, true);
+		wake_up_interruptible(&gc->audio0_wait);
 	}
 
 	/* The official driver prologue. */
@@ -2102,6 +2128,10 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 			 rx_timing.vactive, mode, c5, c6,
 			 avmute_packet & BIT(3) ? "yes" : "no",
 			 avmute_control);
+	if (!ret && (c5 & BIT(7))) {
+		ret = -EAGAIN;
+		goto out_restore_page;
+	}
 	if (!ret) {
 		gc->video0_receiver_width = rx_timing.hactive;
 		gc->video0_receiver_height = rx_timing.vactive;
@@ -2110,7 +2140,7 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 		gc->video0_receiver_extended_colorimetry =
 			extended_colorimetry;
 		gc->video0_receiver_dual_pixel = dual_pixel;
-		gc->video0_receiver_output_valid = true;
+		WRITE_ONCE(gc->video0_receiver_output_valid, true);
 	}
 
 out_restore_page:
