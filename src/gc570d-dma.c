@@ -448,16 +448,12 @@ static u32 gc570d_xilinx_video0_control(
 	const struct gc570d_video0_signal *signal, u16 width, u16 height)
 {
 	u32 control;
-	bool sub_1080p = signal->detected_width <= 1280 &&
-			 signal->detected_height <= 720;
 
-	control = (gc570d_video0_geometry_class(width, height) + 2) << 8;
-	if (signal->profile == GC570D_VIDEO0_HDR_BT2020 && !sub_1080p)
-		control |= BIT(16) | 0x05;
-	else if (signal->profile == GC570D_VIDEO0_SDR_YUV420_BT709)
-		control |= 0x33;
-	else
-		control |= 0x10;
+	control = ((gc570d_video0_geometry_class(width, height) + 2) << 8) |
+		(signal->profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 :
+		 signal->profile == GC570D_VIDEO0_SDR_RGB ? 0x10 : 0x33);
+	if (signal->profile == GC570D_VIDEO0_HDR_BT2020)
+		control |= BIT(16);
 	return control;
 }
 

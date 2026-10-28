@@ -29,13 +29,10 @@ kernel from the same released source archive.
 %check
 test -f config/wireplumber/51-gc570d.conf
 grep -F 'AVerMedia Live Gamer DUO' config/wireplumber/51-gc570d.conf
-test -f config/gc570d.conf
 
 %install
 install -D -m 0644 config/wireplumber/51-gc570d.conf \
     %{buildroot}%{_datadir}/wireplumber/wireplumber.conf.d/51-gc570d.conf
-install -D -m 0644 config/gc570d.conf \
-    %{buildroot}%{_datadir}/gc570d/gc570d.conf
 
 %files
 %license LICENSE
@@ -43,7 +40,6 @@ install -D -m 0644 config/gc570d.conf \
 %doc docs/DATA_PROVENANCE.md docs/INSTALL.md docs/LEGAL.md
 %doc docs/PACKAGING.md docs/REVERSE_ENGINEERING.md docs/STATUS.md docs/USAGE.md
 %{_datadir}/wireplumber/wireplumber.conf.d/51-gc570d.conf
-%{_datadir}/gc570d/gc570d.conf
 
 %changelog
 * Sat Oct 24 2026 neoyagami <neoyagami@gmail.com> - 1.0.5-1

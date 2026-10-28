@@ -996,40 +996,6 @@ static size_t gc570d_video0_frame_size(const struct gc570d_dev *gc)
 	return (size_t)gc->video0_width * gc->video0_height * 2;
 }
 
-static void gc570d_video0_copy_or_scale_yuyv(u8 *dst, u16 dst_w, u16 dst_h,
-					     const u8 *src, u16 src_w, u16 src_h)
-{
-	u32 x;
-	u32 y;
-
-	if (!src_w || !src_h || (src_w == dst_w && src_h == dst_h)) {
-		memcpy(dst, src, (size_t)dst_w * dst_h * 2);
-		return;
-	}
-
-	for (y = 0; y < dst_h; y++) {
-		u32 src_y = y * src_h / dst_h;
-		const u8 *src_line = src + (size_t)src_y * src_w * 2;
-		u8 *dst_line = dst + (size_t)y * dst_w * 2;
-
-		for (x = 0; x < dst_w; x += 2) {
-			u32 src_x0 = x * src_w / dst_w;
-			u32 src_x1 = (x + 1) * src_w / dst_w;
-			u32 chroma_x = ((src_x0 + src_x1) / 2) & ~1U;
-			u32 pair0 = (src_x0 & ~1U) * 2;
-			u32 pair1 = (src_x1 & ~1U) * 2;
-			u32 chroma_pair = chroma_x * 2;
-
-			dst_line[x * 2] =
-				src_line[pair0 + (src_x0 & 1 ? 2 : 0)];
-			dst_line[x * 2 + 1] = src_line[chroma_pair + 1];
-			dst_line[x * 2 + 2] =
-				src_line[pair1 + (src_x1 & 1 ? 2 : 0)];
-			dst_line[x * 2 + 3] = src_line[chroma_pair + 3];
-		}
-	}
-}
-
 static bool gc570d_video0_work_pending(struct gc570d_dev *gc)
 {
 	return READ_ONCE(gc->video0_stopping) ||
@@ -1047,26 +1013,22 @@ static void gc570d_video0_fill_sg(struct gc570d_dev *gc,
 {
 	dma_addr_t frame_dma = gc->video0_dma_addr[slot];
 	__le32 *sg = gc->video0_sg_cpu[slot];
-	u16 dma_width = gc->video0_dma_width ?
-		gc->video0_dma_width : gc->video0_width;
-	u16 dma_height = gc->video0_dma_height ?
-		gc->video0_dma_height : gc->video0_height;
 	unsigned int line;
 
 	/*
-	 * The official driver publishes scanline fragments in reverse address order
+	 * The official driver publishes 1,080 scanline fragments in reverse address order
 	 * because its positive-height YUY2 DIB is bottom-up.  V4L2 packed YUYV
 	 * is top-first, so retain the exact one-fragment-per-line DMA contract
 	 * but publish ascending line addresses at this API boundary.
 	 */
-	for (line = 0; line < dma_height; line++) {
+	for (line = 0; line < gc->video0_height; line++) {
 		__le32 *entry = sg + line * 4;
 		dma_addr_t line_dma = frame_dma +
-			(size_t)line * dma_width * 2;
+			(size_t)line * gc->video0_width * 2;
 
 		entry[0] = cpu_to_le32(lower_32_bits(line_dma));
 		entry[1] = cpu_to_le32(upper_32_bits(line_dma));
-		entry[2] = cpu_to_le32((dma_width * 2) /
+		entry[2] = cpu_to_le32((gc->video0_width * 2) /
 					 sizeof(u32));
 		entry[3] = cpu_to_le32(GC570D_DMA_STREAM_SG_FLAGS);
 	}
@@ -1077,14 +1039,12 @@ static void gc570d_video0_publish_slot(struct gc570d_dev *gc,
 					unsigned int slot, bool rearm)
 {
 	u32 address = GC570D_DMA0_DESC_ADDRESS + slot * 0x0c;
-	u16 dma_height = gc->video0_dma_height ?
-		gc->video0_dma_height : gc->video0_height;
 
 	writel(lower_32_bits(gc->video0_sg_dma[slot]),
 	       gc->bar0 + address);
 	writel(upper_32_bits(gc->video0_sg_dma[slot]),
 	       gc->bar0 + address + 4);
-	writel(dma_height, gc->bar0 + address + 8);
+	writel(gc->video0_height, gc->bar0 + address + 8);
 	if (rearm)
 		writel(readl(gc->bar0 + GC570D_DMA0_DESC_CONTROL) |
 		       BIT(slot + 1),
@@ -1358,10 +1318,7 @@ static int gc570d_video0_thread(void *data)
 				vb2_queue_error(&gc->video0_queue);
 				break;
 			}
-			gc570d_video0_copy_or_scale_yuyv(
-				destination, gc->video0_width, gc->video0_height,
-				gc->video0_dma_cpu[slot], gc->video0_dma_width,
-				gc->video0_dma_height);
+			memcpy(destination, gc->video0_dma_cpu[slot], frame_size);
 			buffer->vb.sequence = gc->video0_sequence++;
 			buffer->vb.field = V4L2_FIELD_NONE;
 			buffer->vb.vb2_buf.timestamp = ktime_get_ns();
@@ -1426,11 +1383,12 @@ static void gc570d_video0_return_buffers(struct gc570d_dev *gc,
 
 static void gc570d_video0_free_sg(struct gc570d_dev *gc)
 {
+	size_t frame_size = gc570d_video0_frame_size(gc);
 	unsigned int slot;
 
 	for (slot = 0; slot < GC570D_DMA_BURST_FRAMES; slot++) {
 		if (gc->video0_dma_cpu[slot])
-			dma_free_coherent(&gc->pdev->dev, GC570D_DMA_FRAME_SIZE,
+			dma_free_coherent(&gc->pdev->dev, frame_size,
 					  gc->video0_dma_cpu[slot],
 					  gc->video0_dma_addr[slot]);
 		gc->video0_dma_cpu[slot] = NULL;
@@ -1511,6 +1469,7 @@ static int gc570d_video0_try_recover_live(struct gc570d_dev *gc,
 	struct gc570d_video0_signal signal;
 	u8 *placeholder;
 	unsigned long flags;
+	size_t frame_size = gc570d_video0_frame_size(gc);
 	unsigned int slot;
 	bool dma_started = false;
 	int ret;
@@ -1538,10 +1497,8 @@ static int gc570d_video0_try_recover_live(struct gc570d_dev *gc,
 		ret = -EBUSY;
 		goto out_deferred;
 	}
-	gc->video0_dma_width = signal.vip_width;
-	gc->video0_dma_height = signal.vip_height;
-	ret = gc570d_xilinx_prepare_video0(gc, &signal, gc->video0_dma_width,
-					   gc->video0_dma_height);
+	ret = gc570d_xilinx_prepare_video0(gc, &signal, gc->video0_width,
+					   gc->video0_height);
 	if (ret)
 		goto out_deferred;
 	if (signal.profile == GC570D_VIDEO0_HDR_BT2020) {
@@ -1549,8 +1506,8 @@ static int gc570d_video0_try_recover_live(struct gc570d_dev *gc,
 		if (ret)
 			goto out_deferred;
 	}
-	ret = gc570d_xilinx_prepare_video0(gc, &signal, gc->video0_dma_width,
-					   gc->video0_dma_height);
+	ret = gc570d_xilinx_prepare_video0(gc, &signal, gc->video0_width,
+					   gc->video0_height);
 	if (ret)
 		goto out_deferred;
 
@@ -1564,8 +1521,7 @@ static int gc570d_video0_try_recover_live(struct gc570d_dev *gc,
 		}
 		memset(gc->video0_sg_cpu[slot], 0, GC570D_DMA_SG_SIZE);
 		gc->video0_dma_cpu[slot] =
-			dma_alloc_coherent(&gc->pdev->dev,
-					   GC570D_DMA_FRAME_SIZE,
+			dma_alloc_coherent(&gc->pdev->dev, frame_size,
 					   &gc->video0_dma_addr[slot], GFP_KERNEL);
 		if (!gc->video0_dma_cpu[slot]) {
 			ret = -ENOMEM;
@@ -1599,8 +1555,8 @@ static int gc570d_video0_try_recover_live(struct gc570d_dev *gc,
 	if ((readl(gc->bar0 + GC570D_VIP0_EVENT_STATUS) &
 	     (BIT(0) | BIT(1))) == (BIT(0) | BIT(1)))
 		writel(BIT(1), gc->bar0 + GC570D_VIP0_EVENT_STATUS);
-	ret = gc570d_vip0_program_yuy2(gc, &signal, gc->video0_dma_width,
-				       gc->video0_dma_height,
+	ret = gc570d_vip0_program_yuy2(gc, &signal, gc->video0_width,
+				       gc->video0_height,
 				       gc->video0_frame_interval);
 	if (ret)
 		goto out_requeue;
@@ -1752,6 +1708,7 @@ static int gc570d_video0_start_streaming(struct vb2_queue *queue,
 					  unsigned int count)
 {
 	struct gc570d_dev *gc = vb2_get_drv_priv(queue);
+	size_t frame_size = gc570d_video0_frame_size(gc);
 	unsigned int slot;
 	bool irq_enabled = false;
 	bool dma_started = false;
@@ -1792,10 +1749,8 @@ static int gc570d_video0_start_streaming(struct vb2_queue *queue,
 		goto out_no_signal;
 	if (ret)
 		goto out_unlock;
-	gc->video0_dma_width = signal.vip_width;
-	gc->video0_dma_height = signal.vip_height;
-	ret = gc570d_xilinx_prepare_video0(gc, &signal, gc->video0_dma_width,
-					   gc->video0_dma_height);
+	ret = gc570d_xilinx_prepare_video0(gc, &signal, gc->video0_width,
+					   gc->video0_height);
 	if (ret)
 		goto out_unlock;
 	if (signal.profile == GC570D_VIDEO0_HDR_BT2020) {
@@ -1803,8 +1758,8 @@ static int gc570d_video0_start_streaming(struct vb2_queue *queue,
 		if (ret)
 			goto out_unlock;
 	}
-	ret = gc570d_xilinx_prepare_video0(gc, &signal, gc->video0_dma_width,
-					   gc->video0_dma_height);
+	ret = gc570d_xilinx_prepare_video0(gc, &signal, gc->video0_width,
+					   gc->video0_height);
 	if (ret)
 		goto out_unlock;
 
@@ -1818,8 +1773,7 @@ static int gc570d_video0_start_streaming(struct vb2_queue *queue,
 		}
 		memset(gc->video0_sg_cpu[slot], 0, GC570D_DMA_SG_SIZE);
 		gc->video0_dma_cpu[slot] =
-			dma_alloc_coherent(&gc->pdev->dev,
-					   GC570D_DMA_FRAME_SIZE,
+			dma_alloc_coherent(&gc->pdev->dev, frame_size,
 					   &gc->video0_dma_addr[slot], GFP_KERNEL);
 		if (!gc->video0_dma_cpu[slot]) {
 			ret = -ENOMEM;
@@ -1878,8 +1832,8 @@ static int gc570d_video0_start_streaming(struct vb2_queue *queue,
 	if ((readl(gc->bar0 + GC570D_VIP0_EVENT_STATUS) &
 	     (BIT(0) | BIT(1))) == (BIT(0) | BIT(1)))
 		writel(BIT(1), gc->bar0 + GC570D_VIP0_EVENT_STATUS);
-	ret = gc570d_vip0_program_yuy2(gc, &signal, gc->video0_dma_width,
-				       gc->video0_dma_height,
+	ret = gc570d_vip0_program_yuy2(gc, &signal, gc->video0_width,
+				       gc->video0_height,
 				       gc->video0_frame_interval);
 	if (ret)
 		goto out_stop;

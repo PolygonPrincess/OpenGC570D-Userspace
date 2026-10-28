@@ -336,8 +336,6 @@ struct gc570d_dev {
 	u32 video0_sequence;
 	u16 video0_width;
 	u16 video0_height;
-	u16 video0_dma_width;
-	u16 video0_dma_height;
 	u32 video0_frame_interval;
 	bool video0_receiver_output_valid;
 	u16 video0_receiver_width;
