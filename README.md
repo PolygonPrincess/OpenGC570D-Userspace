@@ -104,6 +104,12 @@ subsystem ID, installation method, Secure Boot state, source/display mode and
 the V4L2 or ALSA behavior observed. See [`CONTRIBUTING.md`](CONTRIBUTING.md)
 for the complete test-report checklist.
 
+Development work is integrated through the `dev` branch before promotion to
+the stable `main` branch. Feature and driver-fix pull requests should normally
+target `dev`; see the
+[`Branch and validation workflow`](CONTRIBUTING.md#branch-and-validation-workflow)
+for the review, hardware-testing and release process.
+
 ## Source layout
 
 Each source, script, and integration file starts with an SPDX
