@@ -1,5 +1,10 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 
+Feature and driver-fix pull requests should normally target `dev`. Target
+`main` only for a `dev` promotion, a release-related change or a narrowly
+scoped urgent fix. See the [branch and validation
+workflow](../CONTRIBUTING.md#branch-and-validation-workflow).
+
 ## Summary
 
 Describe the problem and the narrow change that addresses it.

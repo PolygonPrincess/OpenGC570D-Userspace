@@ -1,5 +1,36 @@
 # Contributing
 
+## Branch and validation workflow
+
+`main` is the stable branch. It contains changes that have passed repository
+checks and the relevant physical-hardware validation. Releases are made from
+`main` only.
+
+`dev` is the integration and hardware-test branch. Feature and driver-fix pull
+requests should normally target `dev`, especially when they change HDMI
+negotiation, EDID/HPD handling, DMA, interrupts, audio recovery, suspend/resume
+or another timing-sensitive hardware path. A change may be merged into `dev`
+with clearly documented test gaps or known limitations so that it can receive
+broader physical testing before it reaches `main`.
+
+The normal flow is:
+
+1. Create a focused feature or fix branch from the current `dev` branch.
+2. Open a pull request targeting `dev` and document static evidence, physical
+   test results, known limitations and hardware still needing validation.
+3. Run the automated checks and test the affected paths on physical hardware.
+4. Promote a tested group of changes with a pull request from `dev` to `main`.
+5. Create a release only after the promotion has reached `main`.
+
+Urgent fixes for a released version may target `main` directly when their scope
+and validation justify it. Such fixes must also be merged or applied back to
+`dev` so that the branches do not regress. Do not force-push or routinely delete
+either `main` or `dev`; preserve their shared review and validation history.
+
+Merging into `dev` means that a change is accepted for integration testing. It
+does not by itself mean that the feature is stable, fully validated or included
+in a release.
+
 ## Driver source layout
 
 The driver is a composite kernel module built from independent objects under
