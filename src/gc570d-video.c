@@ -275,6 +275,24 @@ static int gc570d_video_try_recover_live(struct gc570d_dev *gc,
 
 	*no_scdt_polls = 0;
 	*hpd_retry_ns = 0;
+	{
+		u16 live_w = 0;
+		u16 live_h = 0;
+		bool live_i = false;
+
+		ret = gc570d_dma_detect_vip1_format(gc, &live_w, &live_h,
+						    &live_i);
+		if (ret)
+			goto out_link_changed;
+		if (*scdt_stable_polls > 0 &&
+		    (live_w != gc->video_input_width ||
+		     live_h != gc->video_input_height ||
+		     live_i != gc->video_input_interlaced))
+			*scdt_stable_polls = 0;
+		gc->video_input_width = live_w;
+		gc->video_input_height = live_h;
+		gc->video_input_interlaced = live_i;
+	}
 	if (++(*scdt_stable_polls) < GC570D_HDMI2_SCDT_STABLE_POLLS) {
 		ret = 0;
 		goto out_unlock;
@@ -293,9 +311,6 @@ static int gc570d_video_try_recover_live(struct gc570d_dev *gc,
 	ret = gc570d_it6802_format_init(gc);
 	if (ret)
 		goto out_link_changed;
-	ret = gc570d_vip_init(gc);
-	if (ret)
-		goto out_link_changed;
 	/* StableOutput mutes the receiver; restore an independently open PCM. */
 	if (gc->audio_prepared) {
 		audio_ret = gc570d_it6802_audio_output_set(gc, true);
@@ -304,6 +319,9 @@ static int gc570d_video_try_recover_live(struct gc570d_dev *gc,
 				"HDMI IN 2 video recovered but audio restore is pending: %d\n",
 				audio_ret);
 	}
+	ret = gc570d_vip_init(gc);
+	if (ret)
+		goto out_link_changed;
 	if (readl(gc->bar0 + GC570D_DMA_DESC_CONTROL) & 0x1f) {
 		ret = -EBUSY;
 		goto out_warn;
@@ -418,28 +436,6 @@ static int gc570d_video_thread(void *data)
 				GC570D_HDMI2_LINK_POLL_NS;
 			if (ret > 0)
 				no_signal_deadline = 0;
-		} else if (!READ_ONCE(gc->video_no_signal) &&
-			   (gc->video_sequence % 60) == 0 &&
-			   mutex_trylock(&gc->capture_lock)) {
-			u16 live_w = 0;
-			u16 live_h = 0;
-			bool live_i = false;
-			int fmt_ret = gc570d_dma_detect_vip1_format(
-				gc, &live_w, &live_h, &live_i);
-
-			mutex_unlock(&gc->capture_lock);
-			if (fmt_ret || live_w != gc->video_input_width ||
-			    live_h != gc->video_input_height ||
-			    live_i != gc->video_input_interlaced) {
-				ret = gc570d_video_switch_to_no_signal(gc);
-				if (ret == -ESHUTDOWN)
-					break;
-				no_signal_deadline = 0;
-				next_link_poll_ns = 0;
-				hpd_retry_ns = 0;
-				no_scdt_polls = 0;
-				scdt_stable_polls = 0;
-			}
 		}
 
 		spin_lock_irqsave(&gc->video_qlock, flags);
@@ -521,7 +517,8 @@ static int gc570d_video_thread(void *data)
 		}
 
 		hardware_index = readl(gc->bar0 + GC570D_DMA_DESC_INDEX) & 7;
-		if (!completed) {
+		if (!completed || hardware_index != 1 ||
+		    !(READ_ONCE(gc->dma_irq_status) & GC570D_DMA_FRAME_IRQ)) {
 			dev_warn(&gc->pdev->dev,
 				 "HDMI IN 2 DMA timeout snapshot: index=%u irq=0x%08x saved_irq=0x%08x control=0x%08x\n",
 				 hardware_index,
@@ -553,19 +550,11 @@ static int gc570d_video_thread(void *data)
 					continue;
 				}
 			}
-		}
-
-		if (!completed || hardware_index != 1 ||
-		    !(READ_ONCE(gc->dma_irq_status) & GC570D_DMA_FRAME_IRQ)) {
-			dev_err(&gc->pdev->dev,
-				"V4L2 DMA failed: completion=%lu index=%u irq=0x%08x control=0x%08x\n",
-				completed, hardware_index,
-				READ_ONCE(gc->dma_irq_status),
-				readl(gc->bar0 + GC570D_DMA_DESC_CONTROL));
 			writel(0, gc->bar0 + GC570D_DMA_DESC_CONTROL);
 			vb2_buffer_done(&buffer->vb.vb2_buf,
 					VB2_BUF_STATE_ERROR);
-			vb2_queue_error(&gc->video_queue);
+			if (ret != -ESHUTDOWN)
+				vb2_queue_error(&gc->video_queue);
 			break;
 		}
 
@@ -648,18 +637,24 @@ static int gc570d_video_start_streaming(struct vb2_queue *queue,
 		ret = -EBUSY;
 		goto out_return;
 	}
-	if (!gc->audio_prepared) {
-		ret = gc570d_it6802_output_enable(gc);
+	ret = gc570d_it6802_output_enable(gc);
+	if (ret && !gc570d_video_is_no_signal_error(ret))
+		goto out_return;
+	if (ret)
+		no_signal = true;
+	if (!no_signal) {
+		ret = gc570d_it6802_format_init(gc);
 		if (ret && !gc570d_video_is_no_signal_error(ret))
 			goto out_return;
-		if (ret) {
-			no_signal = true;
-		} else {
-			ret = gc570d_it6802_format_init(gc);
-			if (ret && !gc570d_video_is_no_signal_error(ret))
-				goto out_return;
-			no_signal = ret != 0;
-		}
+		no_signal = ret != 0;
+	}
+	if (!no_signal && gc->audio_prepared) {
+		int audio_ret = gc570d_it6802_audio_output_set(gc, true);
+
+		if (audio_ret)
+			dev_warn_ratelimited(&gc->pdev->dev,
+				"HDMI IN 2 video started but audio restore is pending: %d\n",
+				audio_ret);
 	}
 	if (!no_signal) {
 		ret = gc570d_vip_init(gc);
@@ -784,7 +779,6 @@ static void gc570d_video_stop_streaming(struct vb2_queue *queue)
 	gc->video_stopping = false;
 	gc->video_no_signal = false;
 	gc->video_dma_active = false;
-	gc->video_user_format = false;
 	if (gc->video_irq_active) {
 		gc570d_video_irq_put_locked(gc);
 		gc->video_irq_active = false;
@@ -862,32 +856,6 @@ static void gc570d_video0_fill_format(struct v4l2_pix_format *pix,
 	pix->xfer_func = V4L2_XFER_FUNC_709;
 }
 
-static void gc570d_video_sync_active_format(struct gc570d_dev *gc)
-{
-	const struct gc570d_video0_format *selected;
-	u16 in_w = 0;
-	u16 in_h = 0;
-	int ret;
-
-	if (vb2_is_busy(&gc->video_queue) || gc->video_user_format)
-		return;
-	mutex_lock(&gc->capture_lock);
-	if (!gc->video_streaming && !READ_ONCE(gc->suspended)) {
-		ret = gc570d_dma_detect_vip1_format(gc, &in_w, &in_h, NULL);
-		if (!ret) {
-			selected = gc570d_video0_find_format(in_w, in_h);
-			if (selected->width == in_w &&
-			    selected->height == in_h) {
-				gc->video_width = selected->width;
-				gc->video_height = selected->height;
-				gc->video_frame_interval =
-					selected->frame_interval;
-			}
-		}
-	}
-	mutex_unlock(&gc->capture_lock);
-}
-
 static int gc570d_video_querycap(struct file *file, void *priv,
 				  struct v4l2_capability *cap)
 {
@@ -915,7 +883,6 @@ static int gc570d_video_get_format(struct file *file, void *priv,
 {
 	struct gc570d_dev *gc = video_drvdata(file);
 
-	gc570d_video_sync_active_format(gc);
 	gc570d_video0_fill_format(&format->fmt.pix, gc->video_width,
 				  gc->video_height);
 	return 0;
@@ -950,7 +917,6 @@ static int gc570d_video_set_format(struct file *file, void *priv,
 	gc->video_width = selected->width;
 	gc->video_height = selected->height;
 	gc->video_frame_interval = selected->frame_interval;
-	gc->video_user_format = true;
 	return 0;
 }
 
@@ -1606,7 +1572,8 @@ static int gc570d_video0_try_recover_live(struct gc570d_dev *gc,
 	if (!mutex_trylock(&gc->capture_lock))
 		return 0;
 	if (READ_ONCE(gc->suspended) || gc->video0_stopping ||
-	    !gc->video0_streaming || !gc->video0_no_signal) {
+	    !gc->video0_streaming || !gc->video0_no_signal ||
+	    (auto_hdmi1 && !READ_ONCE(gc->hdmi1_auto_ready))) {
 		mutex_unlock(&gc->capture_lock);
 		return 0;
 	}
@@ -1869,6 +1836,8 @@ static int gc570d_video0_start_streaming(struct vb2_queue *queue,
 	 * configuration when the HDMI format changes.  The Linux passthrough pump owns only the
 	 * splitter, so refresh the HDMI IN 1 receiver here before every RUN.
 	 */
+	if (auto_hdmi1 && !READ_ONCE(gc->hdmi1_auto_ready))
+		goto out_no_signal;
 	ret = gc570d_it68051_video_output_on(gc);
 	if (ret && gc570d_video_is_no_signal_error(ret))
 		goto out_no_signal;
@@ -2065,7 +2034,6 @@ static void gc570d_video0_stop_streaming(struct vb2_queue *queue)
 	WRITE_ONCE(gc->video0_no_signal, false);
 	WRITE_ONCE(gc->video0_dma_active, false);
 	WRITE_ONCE(gc->video0_reconfigure_pending, false);
-	gc->video0_user_format = false;
 	if (gc->video0_irq_active) {
 		gc570d_video_irq_put_locked(gc);
 		gc->video0_irq_active = false;
@@ -2089,37 +2057,11 @@ static const struct vb2_ops gc570d_video0_queue_ops = {
 	.stop_streaming = gc570d_video0_stop_streaming,
 };
 
-static void gc570d_video0_sync_active_format(struct gc570d_dev *gc)
-{
-	const struct gc570d_video0_format *selected;
-	struct gc570d_video0_signal signal;
-
-	if (vb2_is_busy(&gc->video0_queue) || gc->video0_user_format)
-		return;
-	mutex_lock(&gc->capture_lock);
-	if (!gc->video0_streaming && !READ_ONCE(gc->suspended)) {
-		if (!gc570d_it68051_video_output_on(gc) &&
-		    !gc570d_vip0_detect_signal(gc, &signal)) {
-			selected = gc570d_video0_find_format(signal.vip_width,
-							     signal.vip_height);
-			if (selected->width == signal.vip_width &&
-			    selected->height == signal.vip_height) {
-				gc->video0_width = selected->width;
-				gc->video0_height = selected->height;
-				gc->video0_frame_interval =
-					selected->frame_interval;
-			}
-		}
-	}
-	mutex_unlock(&gc->capture_lock);
-}
-
 static int gc570d_video0_get_format(struct file *file, void *priv,
 				     struct v4l2_format *format)
 {
 	struct gc570d_dev *gc = video_drvdata(file);
 
-	gc570d_video0_sync_active_format(gc);
 	gc570d_video0_fill_format(&format->fmt.pix, gc->video0_width,
 				  gc->video0_height);
 	return 0;
@@ -2167,7 +2109,6 @@ static int gc570d_video0_set_format(struct file *file, void *priv,
 	gc->video0_width = selected->width;
 	gc->video0_height = selected->height;
 	gc->video0_frame_interval = selected->frame_interval;
-	gc->video0_user_format = true;
 	return 0;
 }
 

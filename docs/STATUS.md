@@ -18,6 +18,9 @@ see [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the requested report details.
 | HDMI IN 1 1440p60 SDR/HDR to 1080p60 SDR capture | Physically validated |
 | HDMI IN 1 measured 1440p120 HDR to 1080p60 SDR capture | Physically validated |
 | HDMI IN 1 native 720p60 SDR capture | Physically validated |
+| HDMI IN 1 1080i, 480p, and 1024x768 capture and hardware scaling | Physically validated |
+| HDMI IN 1 and HDMI IN 2 576p50 capture | Implemented in format tables and VIP0/VIP1 scaler paths; awaiting physical 576p test source |
+| HDMI IN 2 1080i, 720p, 480p, and 1024x768 capture and hardware scaling | Physically validated |
 | HDMI IN 1 stereo S16_LE/48 kHz ALSA | Physically validated |
 | Both V4L2 streams, HDMI 2 then HDMI 1 | Physically validated |
 | Both ALSA/PipeWire sources in OBS | Physically validated |
@@ -27,7 +30,6 @@ see [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the requested report details.
 | Idle S3/deep suspend and resume | Physically validated twice on Bazzite 44 with kernel `7.2.9-ogc3.1.fc44.x86_64`: the driver quiesced the card, resumed through the full HDMI2 base initialization, restored RGB, kept both V4L2 nodes registered, and captured HDMI IN 2 again at 59.94 fps without a module reload |
 | Suspend while V4L2 capture is active | Physically validated with a continuously streaming HDMI IN 2 V4L2 client: the driver returned `-EBUSY` for both the deep attempt and the subsequent s2idle fallback, preventing sleep without disrupting the capture; a later idle S3 cycle still succeeded |
 | HDMI IN 1 and ALSA recovery across S3 | Implemented but not yet physically validated with a live HDMI IN 1 source or active post-resume ALSA capture |
-| Other recovered 1080p-or-lower capture modes | Not fully validated |
 | VRR, HDCP content, every monitor/source combination | Unsupported or unvalidated |
 
 “Physically validated” means I observed the real output or capture and, where

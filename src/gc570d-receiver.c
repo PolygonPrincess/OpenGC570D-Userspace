@@ -887,7 +887,7 @@ int gc570d_it6802_output_enable(struct gc570d_dev *gc)
 	ret = gc570d_receiver_update8(gc, bus, 0x64, 0x80, 0x00);
 	if (ret)
 		return ret;
-	msleep(10);
+	msleep(50);
 	ret = gc570d_receiver_update8(gc, bus, 0x53, 0x0f, 0x00);
 	if (ret)
 		return ret;
@@ -1770,7 +1770,7 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 		return -ENOLINK;
 	}
 
-	/* The official driver: stable-state marker. */
+	/* Require a locked IT68051 signal before querying the splitter or enabling output. */
 	ret = gc570d_it68051_select_page(gc, 0);
 	if (ret)
 		goto out_restore_page;
@@ -1783,6 +1783,7 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 		ret = -ENOLINK;
 		goto out_restore_page;
 	}
+	/* The official driver: stable-state marker. */
 	ret = gc570d_receiver_write8(gc, bus, 0x90, 0x8f);
 	if (ret)
 		goto out_restore_page;
@@ -1818,6 +1819,13 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	ret = gc570d_splitter_measure_rx_timing(gc, input_color, &rx_timing);
 	if (ret)
 		goto out_restore_page;
+	if (rx_timing.hactive < 640 || rx_timing.hactive > 4096 ||
+	    (rx_timing.hactive & 1) ||
+	    rx_timing.vactive < 240 || rx_timing.vactive > 2160) {
+		WRITE_ONCE(gc->video0_receiver_output_valid, false);
+		ret = -ENOLINK;
+		goto out_restore_page;
+	}
 	dual_pixel = input_color == 3 || rx_timing.hactive > 1920 ||
 		(rx_timing.pixel_clock >= 150001 &&
 		 (rx_timing.hactive >= 1920 || rx_timing.vactive >= 2160));

@@ -82,8 +82,7 @@ int gc570d_dma_detect_vip1_format(struct gc570d_dev *gc,
 				  bool *interlaced_out)
 {
 	const struct gc570d_i2c_bus *bus = &gc570d_receiver_buses[1];
-	static const u8 registers[] = { 0x0a, 0x99, 0x9c, 0x9d, 0x9e, 0x9f,
-					0xa3, 0xa4, 0xa5 };
+	static const u8 registers[] = { 0x0a, 0x99, 0x9e, 0x9f, 0xa4, 0xa5 };
 	u8 value[ARRAY_SIZE(registers)];
 	u32 last_irq;
 	u32 last_status;
@@ -100,11 +99,12 @@ int gc570d_dma_detect_vip1_format(struct gc570d_dev *gc,
 			return ret;
 	}
 
-	hactive = ((value[5] & 0x3f) << 8) | value[4];
-	vactive = ((value[7] & 0xf0) << 4) | value[8];
+	hactive = ((value[3] & 0x3f) << 8) | value[2];
+	vactive = ((value[4] & 0xf0) << 4) | value[5];
 	if (!(value[0] & BIT(7)))
 		return -ENOLINK;
-	interlaced = !!(value[1] & BIT(1));
+	interlaced = !!(value[1] & BIT(1)) ||
+		     (hactive == 1920 && vactive == 540);
 	if (interlaced) {
 		if (hactive != 1920 || vactive != 540)
 			return -EINVAL;
@@ -136,11 +136,13 @@ static void gc570d_vip_program_yuy2(struct gc570d_dev *gc,
 {
 	u16 out_w = output_width ? output_width : GC570D_WIDTH;
 	u16 out_h = output_height ? output_height : GC570D_HEIGHT;
-	u32 scaler_in_h = interlaced ? (input_height >> 1) : input_height;
-	u32 scaler_out_h = interlaced ? (out_h >> 1) : out_h;
+	u16 in_h = interlaced ? (input_height >> 1) : input_height;
+	u32 scaler_in_h = in_h;
+	u32 scaler_out_h = out_h;
 	u32 scaler_flags = (out_w * 2 < input_width ? BIT(0) : 0) |
 			   (scaler_in_h > scaler_out_h * 2 ? BIT(4) : 0);
-	bool scale = input_width != out_w || input_height != out_h;
+	bool scale = input_width != out_w || scaler_in_h != scaler_out_h ||
+		     input_width != GC570D_WIDTH || in_h != GC570D_HEIGHT;
 	u32 value;
 
 	/* CVDecVIP::Start, channel 1, packed YUY2 with optional VIP1 scaling. */
@@ -159,8 +161,8 @@ static void gc570d_vip_program_yuy2(struct gc570d_dev *gc,
 
 	writel(input_width, gc->bar0 + GC570D_VIP_CROP_WIDTH);
 	writel(input_width, gc->bar0 + GC570D_VIP_OUTPUT_WIDTH);
-	writel(input_height, gc->bar0 + GC570D_VIP_CROP_HEIGHT);
-	writel(input_height, gc->bar0 + GC570D_VIP_OUTPUT_HEIGHT);
+	writel(in_h, gc->bar0 + GC570D_VIP_CROP_HEIGHT);
+	writel(in_h, gc->bar0 + GC570D_VIP_OUTPUT_HEIGHT);
 
 	writel(0, gc->bar0 + GC570D_VIP_SCALER_CTRL);
 	writel(div_u64((u64)input_width << 20, out_w),
@@ -177,7 +179,6 @@ static void gc570d_vip_program_yuy2(struct gc570d_dev *gc,
 	       gc->bar0 + GC570D_VIP_OUTPUT_SIZE);
 	writel(0x00004040, gc->bar0 + GC570D_VIP_SCALER_PHASE);
 	writel(scaler_flags, gc->bar0 + GC570D_VIP_SCALER_FLAGS);
-
 	if (!READ_ONCE(gc->video0_dma_active))
 		writel(0, gc->bar0 + GC570D_VIP_BYPASS);
 	writel(3, gc->bar0 + GC570D_VIP_SCALER_CTRL);
@@ -188,13 +189,11 @@ static void gc570d_vip_program_yuy2(struct gc570d_dev *gc,
 
 	value = readl(gc->bar0 + GC570D_VIP_CHANNEL_CTRL);
 	writel(value | BIT(0), gc->bar0 + GC570D_VIP_CHANNEL_CTRL);
-	if (!READ_ONCE(gc->video0_dma_active)) {
-		writel(0, gc->bar0 + GC570D_VIP_COLOR_0);
-		/* GC570D stream-start defaults selected by the official driver. */
-		writel(0x000005a0, gc->bar0 + GC570D_VIP_COLOR_1);
-		writel(0x00000009, gc->bar0 + GC570D_VIP_COLOR_2);
-		writel(0x000c000c, gc->bar0 + GC570D_VIP_COLOR_3);
-	}
+	writel(0, gc->bar0 + GC570D_VIP_COLOR_0);
+	/* GC570D stream-start defaults selected by the official driver. */
+	writel(0x000005a0, gc->bar0 + GC570D_VIP_COLOR_1);
+	writel(0x00000009, gc->bar0 + GC570D_VIP_COLOR_2);
+	writel(0x000c000c, gc->bar0 + GC570D_VIP_COLOR_3);
 	value = readl(gc->bar0 + GC570D_VIP_GLOBAL_START);
 	writel(value | BIT(0), gc->bar0 + GC570D_VIP_GLOBAL_START);
 	readl(gc->bar0 + GC570D_VIP_GLOBAL_START);
@@ -363,7 +362,8 @@ out_restore_page:
 
 	if (!(value[0] & BIT(7)))
 		return -ENOLINK;
-	signal->interlaced = !!(value[1] & BIT(1));
+	signal->interlaced = !!(value[1] & BIT(1)) ||
+			     (width == 1920 && height == 540);
 	if (signal->interlaced) {
 		if (width != 1920 || height != 540)
 			return -EINVAL;
@@ -723,10 +723,12 @@ int gc570d_vip0_program_yuy2(
 	 * all four registers here.  Values 0/0x5a0/9/12 belong exclusively to
 	 * the auxiliary +0x178 path, not this DMA0 stream.
 	 */
-	writel(0, gc->bar0 + GC570D_VIP_COLOR_0);
-	writel(0, gc->bar0 + GC570D_VIP_COLOR_1);
-	writel(0, gc->bar0 + GC570D_VIP_COLOR_2);
-	writel(0, gc->bar0 + GC570D_VIP_COLOR_3);
+	if (!READ_ONCE(gc->video_dma_active)) {
+		writel(0, gc->bar0 + GC570D_VIP_COLOR_0);
+		writel(0, gc->bar0 + GC570D_VIP_COLOR_1);
+		writel(0, gc->bar0 + GC570D_VIP_COLOR_2);
+		writel(0, gc->bar0 + GC570D_VIP_COLOR_3);
+	}
 	/* The official driver preserves the current global state for the start edge. */
 	value = readl(gc->bar0 + GC570D_VIP_GLOBAL_START);
 	writel(value | BIT(0), gc->bar0 + GC570D_VIP_GLOBAL_START);
