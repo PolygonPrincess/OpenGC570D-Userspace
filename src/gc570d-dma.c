@@ -77,8 +77,9 @@ void gc570d_reset_audio_channel(struct gc570d_dev *gc,
 	msleep(30);
 }
 
-static int gc570d_dma_detect_vip1_format(struct gc570d_dev *gc,
-					 u16 *width_out, u16 *height_out)
+int gc570d_dma_detect_vip1_format(struct gc570d_dev *gc,
+				  u16 *width_out, u16 *height_out,
+				  bool *interlaced_out)
 {
 	const struct gc570d_i2c_bus *bus = &gc570d_receiver_buses[1];
 	static const u8 registers[] = { 0x0a, 0x99, 0x9c, 0x9d, 0x9e, 0x9f,
@@ -88,6 +89,7 @@ static int gc570d_dma_detect_vip1_format(struct gc570d_dev *gc,
 	u32 last_status;
 	u16 hactive;
 	u16 vactive;
+	bool interlaced;
 	size_t i;
 	int ret;
 
@@ -102,33 +104,46 @@ static int gc570d_dma_detect_vip1_format(struct gc570d_dev *gc,
 	vactive = ((value[7] & 0xf0) << 4) | value[8];
 	if (!(value[0] & BIT(7)))
 		return -ENOLINK;
-	if (value[1] & BIT(1))
-		return -EINVAL;
-	if (hactive < 640 || hactive > 1920 ||
-	    vactive < 480 || vactive > 1080 ||
-	    (hactive & 1) || (vactive & 1))
+	interlaced = !!(value[1] & BIT(1));
+	if (interlaced) {
+		if (hactive != 1920 || vactive != 540)
+			return -EINVAL;
+		vactive *= 2;
+	} else if (hactive < 640 || hactive > 1920 ||
+		   vactive < 480 || vactive > 1080 ||
+		   (hactive & 1) || (vactive & 1)) {
 		return -ERANGE;
+	}
 
 	if (width_out)
 		*width_out = hactive;
 	if (height_out)
 		*height_out = vactive;
+	if (interlaced_out)
+		*interlaced_out = interlaced;
 	return 0;
 }
 
 static int gc570d_dma_validate_format(struct gc570d_dev *gc)
 {
-	return gc570d_dma_detect_vip1_format(gc, NULL, NULL);
+	return gc570d_dma_detect_vip1_format(gc, NULL, NULL, NULL);
 }
 
-static void gc570d_vip_program_1080p_yuy2(struct gc570d_dev *gc,
-					  u16 input_width, u16 input_height)
+static void gc570d_vip_program_yuy2(struct gc570d_dev *gc,
+				    u16 input_width, u16 input_height,
+				    u16 output_width, u16 output_height,
+				    bool interlaced)
 {
-	bool scale = input_width != GC570D_WIDTH ||
-		     input_height != GC570D_HEIGHT;
+	u16 out_w = output_width ? output_width : GC570D_WIDTH;
+	u16 out_h = output_height ? output_height : GC570D_HEIGHT;
+	u32 scaler_in_h = interlaced ? (input_height >> 1) : input_height;
+	u32 scaler_out_h = interlaced ? (out_h >> 1) : out_h;
+	u32 scaler_flags = (out_w * 2 < input_width ? BIT(0) : 0) |
+			   (scaler_in_h > scaler_out_h * 2 ? BIT(4) : 0);
+	bool scale = input_width != out_w || input_height != out_h;
 	u32 value;
 
-	/* CVDecVIP::Start, channel 1, packed YUY2 with optional VIP1 upscaling. */
+	/* CVDecVIP::Start, channel 1, packed YUY2 with optional VIP1 scaling. */
 	value = readl(gc->bar0 + GC570D_VIP_GLOBAL_FORMAT);
 	writel(value & ~GENMASK(1, 0),
 	       gc->bar0 + GC570D_VIP_GLOBAL_FORMAT);
@@ -148,22 +163,23 @@ static void gc570d_vip_program_1080p_yuy2(struct gc570d_dev *gc,
 	writel(input_height, gc->bar0 + GC570D_VIP_OUTPUT_HEIGHT);
 
 	writel(0, gc->bar0 + GC570D_VIP_SCALER_CTRL);
-	writel(div_u64((u64)input_width << 20, GC570D_WIDTH),
+	writel(div_u64((u64)input_width << 20, out_w),
 	       gc->bar0 + GC570D_VIP_SCALE_X);
-	writel(div_u64((u64)input_height << 20, GC570D_HEIGHT),
+	writel(div_u64((u64)scaler_in_h << 20, scaler_out_h),
 	       gc->bar0 + GC570D_VIP_SCALE_Y);
-	writel(((u32)input_height << 16) | input_width,
+	writel((scaler_in_h << 16) | input_width,
 	       gc->bar0 + GC570D_VIP_INPUT_SIZE);
 	writel(((u32)(input_width - 1)) << 16,
 	       gc->bar0 + GC570D_VIP_INPUT_X_LAST);
-	writel(((u32)(input_height - 1)) << 16,
+	writel((scaler_in_h - 1) << 16,
 	       gc->bar0 + GC570D_VIP_INPUT_Y_LAST);
-	writel((GC570D_HEIGHT << 16) | GC570D_WIDTH,
+	writel((scaler_out_h << 16) | out_w,
 	       gc->bar0 + GC570D_VIP_OUTPUT_SIZE);
 	writel(0x00004040, gc->bar0 + GC570D_VIP_SCALER_PHASE);
-	writel(0, gc->bar0 + GC570D_VIP_SCALER_FLAGS);
+	writel(scaler_flags, gc->bar0 + GC570D_VIP_SCALER_FLAGS);
 
-	writel(0, gc->bar0 + GC570D_VIP_BYPASS);
+	if (!READ_ONCE(gc->video0_dma_active))
+		writel(0, gc->bar0 + GC570D_VIP_BYPASS);
 	writel(3, gc->bar0 + GC570D_VIP_SCALER_CTRL);
 	writel(0, gc->bar0 + GC570D_VIP_AUX_1);
 	writel(0, gc->bar0 + GC570D_VIP_AUX_0);
@@ -172,11 +188,13 @@ static void gc570d_vip_program_1080p_yuy2(struct gc570d_dev *gc,
 
 	value = readl(gc->bar0 + GC570D_VIP_CHANNEL_CTRL);
 	writel(value | BIT(0), gc->bar0 + GC570D_VIP_CHANNEL_CTRL);
-	writel(0, gc->bar0 + GC570D_VIP_COLOR_0);
-	/* GC570D stream-start defaults selected by the official driver for 1080-line input. */
-	writel(0x000005a0, gc->bar0 + GC570D_VIP_COLOR_1);
-	writel(0x00000009, gc->bar0 + GC570D_VIP_COLOR_2);
-	writel(0x000c000c, gc->bar0 + GC570D_VIP_COLOR_3);
+	if (!READ_ONCE(gc->video0_dma_active)) {
+		writel(0, gc->bar0 + GC570D_VIP_COLOR_0);
+		/* GC570D stream-start defaults selected by the official driver. */
+		writel(0x000005a0, gc->bar0 + GC570D_VIP_COLOR_1);
+		writel(0x00000009, gc->bar0 + GC570D_VIP_COLOR_2);
+		writel(0x000c000c, gc->bar0 + GC570D_VIP_COLOR_3);
+	}
 	value = readl(gc->bar0 + GC570D_VIP_GLOBAL_START);
 	writel(value | BIT(0), gc->bar0 + GC570D_VIP_GLOBAL_START);
 	readl(gc->bar0 + GC570D_VIP_GLOBAL_START);
@@ -186,17 +204,26 @@ int gc570d_vip_init(struct gc570d_dev *gc)
 {
 	u16 input_width = GC570D_WIDTH;
 	u16 input_height = GC570D_HEIGHT;
+	u16 output_width = gc->video_width ? gc->video_width : GC570D_WIDTH;
+	u16 output_height = gc->video_height ? gc->video_height : GC570D_HEIGHT;
+	bool interlaced = false;
 	int ret;
 
-	ret = gc570d_dma_detect_vip1_format(gc, &input_width, &input_height);
+	ret = gc570d_dma_detect_vip1_format(gc, &input_width, &input_height,
+					    &interlaced);
 	if (ret)
 		return dev_err_probe(&gc->pdev->dev, ret,
-				     "VIP init requires progressive 480p..1080p on channel 1\n");
+				     "VIP init requires 480p..1080p or 1080i on channel 1\n");
 
-	gc570d_vip_program_1080p_yuy2(gc, input_width, input_height);
+	gc->video_input_width = input_width;
+	gc->video_input_height = input_height;
+	gc->video_input_interlaced = interlaced;
+	gc570d_vip_program_yuy2(gc, input_width, input_height,
+				output_width, output_height, interlaced);
 	dev_info(&gc->pdev->dev,
-		 "VIP channel 1 initialized: %ux%u input to 1920x1080 packed YUY2\n",
-		 input_width, input_height);
+		 "VIP channel 1 initialized: %ux%u%s input to %ux%u packed YUY2\n",
+		 input_width, input_height, interlaced ? "i" : "p",
+		 output_width, output_height);
 	return 0;
 }
 
@@ -318,9 +345,9 @@ int gc570d_vip0_detect_signal(
 	extended_colorimetry = (avi17 >> 4) & 0x07;
 
 	/*
-	 * IT68051 reports the horizontal sample count for YCbCr 4:2:0. The
+	 * IT68051 reports the horizontal sample count for YCbCr 4:2:0.  The
 	 * official driver expands that count back to the logical pixel width
-	 * before publishing and classifying the decoded format. Without this,
+	 * before publishing and classifying the decoded format.  Without this,
 	 * 3840x2160 4:2:0 appears as 1920x2160, incorrectly selects working class
 	 * 1/Xilinx mode 0 and bypasses the card's 4K-to-1080p preprocessing path.
 	 */
@@ -336,9 +363,14 @@ out_restore_page:
 
 	if (!(value[0] & BIT(7)))
 		return -ENOLINK;
-	if (value[1] & BIT(1))
-		return -EINVAL;
-
+	signal->interlaced = !!(value[1] & BIT(1));
+	if (signal->interlaced) {
+		if (width != 1920 || height != 540)
+			return -EINVAL;
+		height *= 2;
+	} else if (width < 640 || height < 480 || (width & 1) || (height & 1)) {
+		return -ERANGE;
+	}
 	if (colorimetry == 3 &&
 	    (extended_colorimetry == 5 || extended_colorimetry == 6)) {
 		if (output_color != 0)
@@ -349,7 +381,7 @@ out_restore_page:
 		 * The official driver leaves CVDecVIP+0x68 at zero when no HDR DRM
 		 * packet is active.  Both native RGB SDR and IT68051 CSC-converted
 		 * YCbCr SDR (4:4:4 and 4:2:2) present RGB444 on the IT68051 output
-		 * bus and use the 0x310 SDR transform.
+		 * bus and use the SDR RGB transform.
 		 */
 		signal->profile = GC570D_VIDEO0_SDR_RGB;
 	} else if (input_color == 3 && colorimetry == 2 &&
@@ -422,8 +454,8 @@ static int gc570d_vip0_profile_show(struct seq_file *s, void *unused)
 
 	control = ((gc570d_video0_geometry_class(gc->video0_width,
 						   gc->video0_height) + 2) << 8) |
-		  (signal.profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 :
-		   signal.profile == GC570D_VIDEO0_SDR_RGB ? 0x10 : 0x33);
+		(signal.profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 :
+		 signal.profile == GC570D_VIDEO0_SDR_RGB ? 0x10 : 0x33);
 	if (signal.profile == GC570D_VIDEO0_HDR_BT2020)
 		control |= BIT(16);
 	seq_printf(s,
@@ -445,11 +477,14 @@ GC570D_DEFINE_SHOW_ATTRIBUTE(gc570d_vip0_profile);
 static u32 gc570d_xilinx_video0_control(
 	const struct gc570d_video0_signal *signal, u16 width, u16 height)
 {
+	u16 xilinx_width = signal->working_mode < 2 ? signal->vip_width : width;
+	u16 xilinx_height = signal->working_mode < 2 ? signal->vip_height : height;
 	u32 control;
 
-	control = ((gc570d_video0_geometry_class(width, height) + 2) << 8) |
-		  (signal->profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 :
-		   signal->profile == GC570D_VIDEO0_SDR_RGB ? 0x10 : 0x33);
+	control = ((gc570d_video0_geometry_class(xilinx_width,
+						 xilinx_height) + 2) << 8) |
+		(signal->profile == GC570D_VIDEO0_HDR_BT2020 ? 0x05 :
+		 signal->profile == GC570D_VIDEO0_SDR_RGB ? 0x10 : 0x33);
 	if (signal->profile == GC570D_VIDEO0_HDR_BT2020)
 		control |= BIT(16);
 	return control;
@@ -573,6 +608,10 @@ int gc570d_vip0_program_yuy2(
 	u16 input_height = signal->vip_height;
 	u32 input_field_height = input_height >> 1;
 	u32 output_field_height = output_height >> 1;
+	u32 scaler_in_height = signal->interlaced ?
+		input_field_height : input_height;
+	u32 scaler_out_height = signal->interlaced ?
+		output_field_height : output_height;
 	u32 scaler_flags = output_width * 2 < input_width ? BIT(0) : 0;
 	bool scale = input_width != output_width || input_height != output_height;
 	u32 value;
@@ -628,19 +667,19 @@ int gc570d_vip0_program_yuy2(
 	writel(0, gc->bar0 + GC570D_VIP0_SCALER_CTRL);
 	writel(div_u64((u64)input_width << 20, output_width),
 	       gc->bar0 + GC570D_VIP0_SCALE_X);
-	writel(div_u64((u64)input_field_height << 20,
-			 output_field_height),
+	writel(div_u64((u64)scaler_in_height << 20,
+			 scaler_out_height),
 	       gc->bar0 + GC570D_VIP0_SCALE_Y);
-	writel((input_field_height << 16) | input_width,
+	writel((scaler_in_height << 16) | input_width,
 	       gc->bar0 + GC570D_VIP0_INPUT_SIZE);
 	writel((input_width - 1) << 16,
 	       gc->bar0 + GC570D_VIP0_INPUT_X_LAST);
-	writel((input_field_height - 1) << 16,
+	writel((scaler_in_height - 1) << 16,
 	       gc->bar0 + GC570D_VIP0_INPUT_Y_LAST);
-	writel((output_field_height << 16) | output_width,
+	writel((scaler_out_height << 16) | output_width,
 	       gc->bar0 + GC570D_VIP0_OUTPUT_SIZE);
 	writel(0x00004040, gc->bar0 + GC570D_VIP0_SCALER_PHASE);
-	if (input_field_height > output_field_height * 2)
+	if (scaler_in_height > scaler_out_height * 2)
 		scaler_flags |= BIT(4);
 	writel(scaler_flags, gc->bar0 + GC570D_VIP0_SCALER_FLAGS);
 

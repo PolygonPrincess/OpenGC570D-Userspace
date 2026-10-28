@@ -242,6 +242,7 @@ struct gc570d_video0_signal {
 	u16 frame_rate;
 	u8 working_mode;
 	u8 xilinx_mode;
+	bool interlaced;
 };
 
 struct gc570d_video0_format {
@@ -309,6 +310,13 @@ struct gc570d_dev {
 	__le32 *video_sg_cpu;
 	dma_addr_t video_sg_dma;
 	u32 video_sequence;
+	u16 video_width;
+	u16 video_height;
+	u32 video_frame_interval;
+	bool video_user_format;
+	u16 video_input_width;
+	u16 video_input_height;
+	bool video_input_interlaced;
 	bool video_streaming;
 	bool video_stopping;
 	bool video_no_signal;
@@ -336,7 +344,10 @@ struct gc570d_dev {
 	u16 video0_width;
 	u16 video0_height;
 	u32 video0_frame_interval;
+	bool video0_user_format;
 	bool video0_receiver_output_valid;
+	bool video0_receiver_interlaced;
+	bool video0_reconfigure_pending;
 	u16 video0_receiver_width;
 	u16 video0_receiver_height;
 	u8 video0_receiver_input_color;
@@ -545,6 +556,9 @@ int gc570d_vip0_detect_signal(
 int gc570d_vip0_program_yuy2(
 	struct gc570d_dev *gc, const struct gc570d_video0_signal *signal,
 	u16 output_width, u16 output_height, u32 frame_interval);
+int gc570d_dma_detect_vip1_format(struct gc570d_dev *gc,
+				  u16 *width_out, u16 *height_out,
+				  bool *interlaced_out);
 int gc570d_vip_init(struct gc570d_dev *gc);
 int gc570d_xilinx_load_hdr_lut_3000(struct gc570d_dev *gc);
 int gc570d_xilinx_prepare_video0(

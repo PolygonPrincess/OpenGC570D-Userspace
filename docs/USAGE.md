@@ -26,9 +26,13 @@ done
 
 Expected names are `gc570d-hdmi2` and `gc570d-hdmi1`.
 
-HDMI IN 2 publishes fixed 1920x1080 YUYV at 60 fps. HDMI IN 1 publishes the
-recovered discrete YUYV capture sizes. High-resolution sources use
-1920x1080p60 SDR output; native 1280x720p60 can use 1280x720 output.
+Both V4L2 nodes publish the recovered discrete YUYV capture sizes (`1920x1080`,
+`1280x720`, `1024x768`, `720x576` at 50 fps, `720x480`, and `640x480`).
+HDMI IN 1 supports `2160p`, `1440p`, `1080p`, `1080i`, `720p`, `576p`, and `480p`
+inputs (downscaling `2160p`/`1440p` to `1920x1080` in the Xilinx stage and
+capturing `1080p`-or-lower natively or through the `VIP0` hardware scaler).
+HDMI IN 2 supports `1080p`, `1080i`, `720p`, `576p`, and `480p` inputs natively
+or scaled through the `VIP1` hardware scaler.
 
 Example query:
 

@@ -1825,6 +1825,7 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	    rx_timing.hactive && rx_timing.vactive &&
 	    gc->video0_receiver_width == rx_timing.hactive &&
 	    gc->video0_receiver_height == rx_timing.vactive &&
+	    gc->video0_receiver_interlaced == !!(rx_timing.flags & BIT(0)) &&
 	    gc->video0_receiver_input_color == input_color &&
 	    gc->video0_receiver_colorimetry == colorimetry &&
 	    gc->video0_receiver_extended_colorimetry ==
@@ -1843,6 +1844,10 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	if (READ_ONCE(gc->audio0_prepared) && READ_ONCE(gc->audio0_running)) {
 		WRITE_ONCE(gc->audio0_recovering, true);
 		wake_up_interruptible(&gc->audio0_wait);
+	}
+	if (READ_ONCE(gc->video0_dma_active)) {
+		WRITE_ONCE(gc->video0_reconfigure_pending, true);
+		wake_up_interruptible(&gc->video0_wait);
 	}
 
 	/* The official driver prologue. */
@@ -1967,8 +1972,9 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	 * For 4K60 SDR BT.709 YCbCr 4:2:0 (input_color == 3), Windows keeps the
 	 * IT68051 output in YCbCr 4:4:4 (output_color = 2) and uses the Xilinx
 	 * 0x33 path.  For HDR BT.2020 and 4:2:2/4:4:4 SDR YCbCr inputs (such as
-	 * 480p/576p/720p YCbCr upscalers and consoles), drive the IT68051 output
-	 * bus as RGB444 (output_color = 0) with the hardware YCbCr-to-RGB CSC.
+	 * 480p/576p/720p/1080i/1080p YCbCr upscalers and consoles), drive the
+	 * IT68051 output bus as RGB444 (output_color = 0) with the hardware
+	 * YCbCr-to-RGB CSC.
 	 */
 	output_color = (input_color == 3 && !hdr_bt2020) ? 2 : 0;
 	ret = gc570d_it68051_select_page(gc, 0);
@@ -2001,8 +2007,11 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 		goto out_restore_page;
 	if (output_color == 0 && input_color != 0) {
 		/* Select BT.2020 HDR, BT.601 SD, or BT.709 HD YCbCr-to-RGB CSC matrix. */
+		bool bt601 = colorimetry == 1 ||
+			(colorimetry == 0 && rx_timing.vactive <= 576 &&
+			 !(rx_timing.flags & BIT(0)));
 		const u8 *csc = hdr_bt2020 ? yuv_bt2020_to_rgb_full_csc :
-			(colorimetry == 1 ? yuv_bt601_to_rgb_full_csc :
+			(bt601 ? yuv_bt601_to_rgb_full_csc :
 			 yuv_bt709_to_rgb_full_csc);
 
 		ret = gc570d_it68051_select_page(gc, 1);
@@ -2154,6 +2163,7 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	if (!ret) {
 		gc->video0_receiver_width = rx_timing.hactive;
 		gc->video0_receiver_height = rx_timing.vactive;
+		gc->video0_receiver_interlaced = !!(rx_timing.flags & BIT(0));
 		gc->video0_receiver_input_color = input_color;
 		gc->video0_receiver_colorimetry = colorimetry;
 		gc->video0_receiver_extended_colorimetry =
