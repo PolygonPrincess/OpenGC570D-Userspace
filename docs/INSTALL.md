@@ -139,6 +139,10 @@ and every V4L2/ALSA client, then run:
 sudo ./scripts/uninstall-portable.sh
 ```
 
+The uninstaller deliberately preserves `/etc/gc570d/gc570d.conf` so local
+hotplug-policy choices are not deleted. Remove that file manually if it is no
+longer needed.
+
 The installed module is specific to the running kernel. After every kernel
 update, boot the new kernel and run `install-portable.sh` again before relying
 on automatic loading.

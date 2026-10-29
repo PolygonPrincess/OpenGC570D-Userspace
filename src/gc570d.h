@@ -538,11 +538,9 @@ int gc570d_splitter_windows_receiver_hdcp_off(struct gc570d_dev *gc);
 int gc570d_splitter_windows_state_pump_start(struct gc570d_dev *gc);
 void gc570d_splitter_windows_state_pump_stop(struct gc570d_dev *gc);
 int gc570d_video0_register(struct gc570d_dev *gc);
-int gc570d_video0_switch_to_no_signal(struct gc570d_dev *gc);
 void gc570d_video_irq_get_locked(struct gc570d_dev *gc);
 void gc570d_video_irq_put_locked(struct gc570d_dev *gc);
 int gc570d_video_register(struct gc570d_dev *gc);
-int gc570d_video_switch_to_no_signal(struct gc570d_dev *gc);
 int gc570d_vip0_detect_signal(
 	struct gc570d_dev *gc, struct gc570d_video0_signal *signal);
 int gc570d_vip0_program_yuy2(

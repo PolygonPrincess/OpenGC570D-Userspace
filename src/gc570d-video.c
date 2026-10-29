@@ -155,7 +155,7 @@ static void gc570d_video_return_buffers(struct gc570d_dev *gc,
 	}
 }
 
-int gc570d_video_switch_to_no_signal(struct gc570d_dev *gc)
+static int gc570d_video_switch_to_no_signal(struct gc570d_dev *gc)
 {
 	u8 *frame = gc570d_no_signal_frame_create(GC570D_WIDTH,
 						   GC570D_HEIGHT);
@@ -1154,6 +1154,7 @@ static bool gc570d_video0_claim_missed_dma(struct gc570d_dev *gc)
 	return true;
 }
 
+static int gc570d_video0_switch_to_no_signal(struct gc570d_dev *gc);
 
 static int gc570d_video0_try_recover_live(struct gc570d_dev *gc,
 					   unsigned int *stable_polls);
@@ -1402,7 +1403,7 @@ static void gc570d_video0_free_sg(struct gc570d_dev *gc)
 	}
 }
 
-int gc570d_video0_switch_to_no_signal(struct gc570d_dev *gc)
+static int gc570d_video0_switch_to_no_signal(struct gc570d_dev *gc)
 {
 	struct gc570d_buffer *slots[GC570D_DMA_BURST_FRAMES] = { NULL };
 	u8 *frame = gc570d_no_signal_frame_create(gc->video0_width,

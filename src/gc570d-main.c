@@ -993,23 +993,23 @@ static int gc570d_suspend(struct device *dev)
 	struct pci_dev *pdev = to_pci_dev(dev);
 	struct gc570d_dev *gc = pci_get_drvdata(pdev);
 
+	mutex_lock(&gc->capture_lock);
+	if (gc->video_streaming || gc->video0_streaming ||
+	    gc->audio_prepared || gc->audio0_prepared ||
+	    gc->video_irq_users) {
+		dev_warn(dev,
+			 "system suspend refused while a video or audio capture stream is active\n");
+		mutex_unlock(&gc->capture_lock);
+		return -EBUSY;
+	}
 	WRITE_ONCE(gc->suspended, true);
+	mutex_unlock(&gc->capture_lock);
+
 	cancel_delayed_work_sync(&gc->hdmi1_auto_work);
 	gc570d_splitter_windows_state_pump_stop(gc);
 	cancel_delayed_work_sync(&gc->led_work);
 
-	if (READ_ONCE(gc->video0_streaming) && !READ_ONCE(gc->video0_no_signal))
-		(void)gc570d_video0_switch_to_no_signal(gc);
-	if (READ_ONCE(gc->video_streaming) && !READ_ONCE(gc->video_no_signal))
-		(void)gc570d_video_switch_to_no_signal(gc);
-
 	mutex_lock(&gc->capture_lock);
-	if (gc->audio0_prepared) {
-		WRITE_ONCE(gc->audio0_recovering, true);
-		gc->audio0_stop_pending = false;
-		atomic_set(&gc->audio0_irq_pending, 0);
-		wake_up_interruptible(&gc->audio0_wait);
-	}
 	writel(0, gc->bar0 + GC570D_REG_DMA_START);
 	writel(0, gc->bar0 + GC570D_DMA0_DESC_CONTROL);
 	writel(0, gc->bar0 + GC570D_DMA_DESC_CONTROL);
@@ -1041,14 +1041,8 @@ static int gc570d_resume(struct device *dev)
 		return dev_err_probe(dev, ret,
 				     "failed to reinitialize capture hardware after system resume\n");
 	}
-	if (gc->video_irq_users > 0)
-		pci_set_master(pdev);
 	WRITE_ONCE(gc->suspended, false);
 	mutex_unlock(&gc->capture_lock);
-
-	wake_up_interruptible(&gc->video0_wait);
-	wake_up_interruptible(&gc->video_wait);
-	wake_up_interruptible(&gc->audio0_wait);
 
 	led_ret = gc570d_led_resume(gc);
 	if (led_ret)

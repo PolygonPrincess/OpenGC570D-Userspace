@@ -52,13 +52,8 @@ done
 
 if grep -q '^gc570d ' /proc/modules; then
 	if [ "$RELOAD" -eq 1 ]; then
-		for dev in /sys/bus/pci/drivers/gc570d/0000:*; do
-			if [ -e "$dev" ]; then
-				basename "$dev" > /sys/bus/pci/drivers/gc570d/unbind 2>/dev/null || true
-			fi
-		done
-		sleep 1
-		rmmod gc570d || die "could not unload existing gc570d module (close OBS/Discord first)"
+		rmmod gc570d ||
+			die "could not unload existing gc570d module; it remains bound (close capture clients first)"
 	else
 		echo "gc570d is already loaded; module defaults were not changed (use --reload to reload)"
 		exit 0
