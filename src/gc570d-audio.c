@@ -574,7 +574,7 @@ static int gc570d_audio_pcm_thread(void *data)
 	struct gc570d_dev *gc = data;
 	struct snd_pcm_substream *substream;
 	struct snd_pcm_runtime *runtime;
-	u8 period[GC570D_AUDIO_PERIOD_BYTES];
+	u8 *period = gc->audio_pcm_period;
 	u32 irq_status;
 	u32 index;
 	size_t buffer_bytes;
@@ -714,6 +714,8 @@ static int gc570d_audio_pcm_hw_free(struct snd_pcm_substream *substream)
 
 	mutex_lock(&gc->capture_lock);
 	gc570d_audio_finish_stop(gc);
+	kfree(gc->audio_pcm_period);
+	gc->audio_pcm_period = NULL;
 	for (i = 0; i < 2; i++) {
 		if (gc->audio_pcm_buffer_cpu[i])
 			dma_free_coherent(&gc->pdev->dev,
@@ -783,6 +785,15 @@ static int gc570d_audio_pcm_prepare(struct snd_pcm_substream *substream)
 		memset(gc->audio_pcm_buffer_cpu[i], GC570D_AUDIO_SENTINEL,
 		       GC570D_AUDIO_BUFFER_SIZE);
 	}
+	/*
+	 * Keep the period scratch buffer off the kthread stack; with the
+	 * thread locals it exceeded the 2048-byte stack-frame limit.
+	 */
+	gc->audio_pcm_period = kmalloc(GC570D_AUDIO_PERIOD_BYTES, GFP_KERNEL);
+	if (!gc->audio_pcm_period) {
+		ret = -ENOMEM;
+		goto out_free;
+	}
 
 	gc570d_reset_audio_channel(gc, GC570D_AUDIO_CHANNEL);
 	writel(GC570D_AUDIO_IRQ | GC570D_AUDIO_TERM_IRQ,
@@ -828,6 +839,8 @@ static int gc570d_audio_pcm_prepare(struct snd_pcm_substream *substream)
 	return 0;
 
 out_free:
+	kfree(gc->audio_pcm_period);
+	gc->audio_pcm_period = NULL;
 	for (i = 0; i < 2; i++) {
 		if (gc->audio_pcm_buffer_cpu[i])
 			dma_free_coherent(&gc->pdev->dev,

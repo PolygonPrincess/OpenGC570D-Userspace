@@ -401,6 +401,7 @@ struct gc570d_dev {
 	spinlock_t audio_pcm_lock;
 	void *audio_pcm_buffer_cpu[2];
 	dma_addr_t audio_pcm_buffer_dma[2];
+	u8 *audio_pcm_period;
 	size_t audio_pcm_pos;
 	bool audio_prepared;
 	bool audio_running;
