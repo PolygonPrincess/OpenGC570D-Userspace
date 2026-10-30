@@ -164,7 +164,8 @@ static int gc570d_video_switch_to_no_signal(struct gc570d_dev *gc)
 		return PTR_ERR(frame);
 
 	mutex_lock(&gc->capture_lock);
-	if (gc->video_stopping || !gc->video_streaming) {
+	if (gc->video_stopping || !gc->video_streaming ||
+	    gc->video_no_signal) {
 		mutex_unlock(&gc->capture_lock);
 		kvfree(frame);
 		return -ESHUTDOWN;
@@ -219,8 +220,8 @@ static int gc570d_video_try_recover_live(struct gc570d_dev *gc,
 
 	if (!mutex_trylock(&gc->capture_lock))
 		return 0;
-	if (gc->video_stopping || !gc->video_streaming ||
-	    !gc->video_no_signal) {
+	if (READ_ONCE(gc->suspended) || gc->video_stopping ||
+	    !gc->video_streaming || !gc->video_no_signal) {
 		mutex_unlock(&gc->capture_lock);
 		return 0;
 	}
@@ -394,6 +395,7 @@ static int gc570d_video_thread(void *data)
 
 	while (!kthread_should_stop()) {
 		ret = wait_event_interruptible(gc->video_wait,
+				kthread_should_stop() ||
 				READ_ONCE(gc->video_stopping) ||
 				!list_empty_careful(&gc->video_buffers));
 		if (ret)
@@ -500,6 +502,11 @@ static int gc570d_video_thread(void *data)
 				 READ_ONCE(gc->dma_irq_status),
 				 readl(gc->bar0 + GC570D_DMA_DESC_CONTROL));
 			ret = gc570d_video_switch_to_no_signal(gc);
+			if (ret == -ESHUTDOWN) {
+				vb2_buffer_done(&buffer->vb.vb2_buf,
+						VB2_BUF_STATE_ERROR);
+				break;
+			}
 			if (!ret) {
 				no_signal_deadline = 0;
 				next_link_poll_ns = 0;
@@ -603,7 +610,8 @@ static int gc570d_video_start_streaming(struct vb2_queue *queue,
 		ret = -EBUSY;
 		goto out_return;
 	}
-	if (gc->video_streaming || gc->video0_streaming) {
+	/* HDMI IN 2 video DMA1 is independent of HDMI IN 1 video DMA0. */
+	if (gc->video_streaming) {
 		ret = -EBUSY;
 		goto out_return;
 	}
@@ -657,13 +665,15 @@ static int gc570d_video_start_streaming(struct vb2_queue *queue,
 	gc->video_no_signal = no_signal;
 	gc->video_dma_active = !no_signal;
 	gc->video_irq_active = false;
-	atomic64_set(&gc->irq_total, 0);
-	atomic64_set(&gc->irq_dma, 0);
-	atomic64_set(&gc->irq_dma0, 0);
-	atomic64_set(&gc->irq_dma1, 0);
-	atomic64_set(&gc->irq_audio, 0);
-	atomic64_set(&gc->irq_other, 0);
-	atomic_set(&gc->irq_other_status, 0);
+	if (!gc->video0_streaming) {
+		atomic64_set(&gc->irq_total, 0);
+		atomic64_set(&gc->irq_dma, 0);
+		atomic64_set(&gc->irq_dma0, 0);
+		atomic64_set(&gc->irq_dma1, 0);
+		atomic64_set(&gc->irq_audio, 0);
+		atomic64_set(&gc->irq_other, 0);
+		atomic_set(&gc->irq_other_status, 0);
+	}
 	if (!no_signal) {
 		pci_set_master(gc->pdev);
 		gc570d_video_irq_get_locked(gc);
@@ -992,6 +1002,8 @@ static bool gc570d_video0_work_pending(struct gc570d_dev *gc)
 	       READ_ONCE(gc->video0_event_overflow) ||
 	       READ_ONCE(gc->video0_event_head) !=
 		READ_ONCE(gc->video0_event_tail) ||
+	       (!READ_ONCE(gc->video0_no_signal) &&
+		!READ_ONCE(gc->video0_receiver_output_valid)) ||
 	       (READ_ONCE(gc->video0_no_signal) &&
 		!list_empty_careful(&gc->video0_buffers));
 }
@@ -1143,6 +1155,7 @@ static bool gc570d_video0_claim_missed_dma(struct gc570d_dev *gc)
 }
 
 static int gc570d_video0_switch_to_no_signal(struct gc570d_dev *gc);
+
 static int gc570d_video0_try_recover_live(struct gc570d_dev *gc,
 					   unsigned int *stable_polls);
 
@@ -1166,6 +1179,20 @@ static int gc570d_video0_thread(void *data)
 			continue;
 		if (kthread_should_stop() || READ_ONCE(gc->video0_stopping))
 			break;
+		if (!READ_ONCE(gc->video0_no_signal) &&
+		    !READ_ONCE(gc->video0_receiver_output_valid)) {
+			ret = gc570d_video0_switch_to_no_signal(gc);
+			dma_idle_polls = 0;
+			stable_polls = 0;
+			no_signal_deadline = 0;
+			next_link_poll_ns = 0;
+			if (!ret)
+				continue;
+			if (ret == -ESHUTDOWN)
+				break;
+			vb2_queue_error(&gc->video0_queue);
+			break;
+		}
 		if (!ret && !READ_ONCE(gc->video0_no_signal)) {
 			if (gc570d_video0_claim_missed_dma(gc)) {
 				dma_idle_polls = 0;
@@ -1187,6 +1214,9 @@ static int gc570d_video0_thread(void *data)
 				 READ_ONCE(gc->video0_event_tail));
 			ret = gc570d_video0_switch_to_no_signal(gc);
 			dma_idle_polls = 0;
+			stable_polls = 0;
+			no_signal_deadline = 0;
+			next_link_poll_ns = 0;
 			if (!ret)
 				continue;
 			if (ret == -ESHUTDOWN)
@@ -1202,8 +1232,10 @@ static int gc570d_video0_thread(void *data)
 						       &stable_polls);
 			next_link_poll_ns = ktime_get_ns() +
 				GC570D_HDMI1_LINK_POLL_NS;
-			if (ret > 0)
+			if (ret > 0) {
 				no_signal_deadline = 0;
+				stable_polls = 0;
+			}
 		}
 
 		if (READ_ONCE(gc->video0_no_signal)) {
@@ -1445,8 +1477,8 @@ static int gc570d_video0_try_recover_live(struct gc570d_dev *gc,
 
 	if (!mutex_trylock(&gc->capture_lock))
 		return 0;
-	if (gc->video0_stopping || !gc->video0_streaming ||
-	    !gc->video0_no_signal) {
+	if (READ_ONCE(gc->suspended) || gc->video0_stopping ||
+	    !gc->video0_streaming || !gc->video0_no_signal) {
 		mutex_unlock(&gc->capture_lock);
 		return 0;
 	}
@@ -1806,6 +1838,14 @@ static int gc570d_video0_start_streaming(struct vb2_queue *queue,
 				       gc->video0_frame_interval);
 	if (ret)
 		goto out_stop;
+	if (READ_ONCE(gc->audio0_recovering)) {
+		int audio_ret = gc570d_audio0_recover_locked(gc);
+
+		if (audio_ret < 0)
+			dev_warn_ratelimited(&gc->pdev->dev,
+				"HDMI IN 1 audio recovery deferred: %d\n",
+				audio_ret);
+	}
 
 	mutex_unlock(&gc->capture_lock);
 	wake_up_interruptible(&gc->video0_wait);

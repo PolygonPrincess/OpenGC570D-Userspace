@@ -50,7 +50,13 @@ const struct file_operations __name ## _fops = {                    \
 #define GC570D_SUBSYSTEM_ID       0x5700
 
 
+enum gc570d_hdmi1_hotplug_policy {
+	GC570D_HOTPLUG_PRESERVE = 0,
+	GC570D_HOTPLUG_RENEGOTIATE = 1,
+};
+
 extern bool auto_hdmi1;
+extern enum gc570d_hdmi1_hotplug_policy hdmi1_hotplug_policy;
 #define GC570D_BAR                0
 #define GC570D_EXPECTED_BAR_SIZE  SZ_512K
 
@@ -409,6 +415,7 @@ struct gc570d_dev {
 	bool splitter_video_stable_pending;
 	u8 splitter_channel_active_mask;
 	u8 splitter_video_stable_mask;
+	u8 splitter_worker_completed_mask;
 	u8 splitter_worker_state4_mask;
 	u8 splitter_eq_state;
 	u8 splitter_eq_retry;
@@ -423,8 +430,10 @@ struct gc570d_dev {
 	struct delayed_work hdmi1_auto_work;
 	u8 hdmi1_auto_phase;
 	bool hdmi1_auto_ready;
-	bool suspended;
+	enum gc570d_hdmi1_hotplug_policy hdmi1_hotplug_policy;
+	bool splitter_edid_published;
 	bool removing;
+	bool suspended;
 	struct led_classdev_mc led_mcdev;
 	struct mc_subled led_subleds[3];
 	struct mutex led_lock;

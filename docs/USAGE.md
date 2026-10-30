@@ -106,6 +106,14 @@ restarts only HDMI IN 1 audio DMA and real stereo audio returns without closing
 the audio client or selecting the source again. This video-and-audio recovery
 was physically validated while HDMI IN 2 continued operating.
 
+Under the default `preserve` policy (`hdmi1_hotplug_policy=preserve`), connecting
+or disconnecting an HDMI OUT monitor never pulses upstream HPD or interrupts
+HDMI IN 1 capture. The internal 4K60 bridge EDID remains published and active
+video/audio capture continues completely uninterrupted. Under `renegotiate` mode,
+connecting an HDMI OUT monitor reads and publishes a compatible two-block EDID
+with a deliberate upstream HPD pulse to renegotiate with the source, while
+disconnecting HDMI OUT keeps the current capture mode without renegotiating.
+
 ## System suspend and resume
 
 System suspend is allowed only while the capture hardware is idle. For an
