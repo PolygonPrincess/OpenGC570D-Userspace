@@ -56,7 +56,6 @@ enum gc570d_hdmi1_hotplug_policy {
 };
 
 extern bool auto_hdmi1;
-extern enum gc570d_hdmi1_hotplug_policy hdmi1_hotplug_policy;
 #define GC570D_BAR                0
 #define GC570D_EXPECTED_BAR_SIZE  SZ_512K
 

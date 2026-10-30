@@ -1843,8 +1843,8 @@ static int gc570d_video0_start_streaming(struct vb2_queue *queue,
 
 		if (audio_ret < 0)
 			dev_warn_ratelimited(&gc->pdev->dev,
-				"HDMI IN 1 audio recovery deferred: %d\n",
-				audio_ret);
+					     "HDMI IN 1 audio recovery deferred: %d\n",
+					     audio_ret);
 	}
 
 	mutex_unlock(&gc->capture_lock);

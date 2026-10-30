@@ -796,7 +796,7 @@ int gc570d_splitter_post_reset_init(struct gc570d_dev *gc)
 					     0x40, 0x00);
 		}
 		/* Prevent tight I2C polling from starving CAOF calibration. */
-		msleep(10);
+		usleep_range(10000, 11000);
 	}
 	caof_value = value;
 	if (!(value & 0x30)) {
@@ -1397,8 +1397,9 @@ static int gc570d_splitter_aux_port_setup(struct gc570d_dev *gc, u8 port)
 	ret = gc570d_splitter_aux_update8(gc, port, 0x01, 0x20, 0x00);
 	if (ret)
 		return ret;
-	ret = gc570d_splitter_update8(gc, 0x58, 0x0c, 1U << (port + 4),
-				       1U << (port + 4));
+	ret = gc570d_splitter_update8(gc, 0x58, 0x0c,
+				      1U << (port + 4),
+				      1U << (port + 4));
 	if (ret)
 		return ret;
 	ret = gc570d_splitter_update8(gc, 0x58, 0x0c, 1U << (port + 4), 0x00);
@@ -4007,8 +4008,8 @@ static int gc570d_splitter_windows_edid_publish(struct gc570d_dev *gc,
 			}
 			if (blk[0] == 0x02 && blk[1] == 0x03) {
 				if (!cta_has_vsdb &&
-				    !gc570d_splitter_cta_physical_address(
-					    blk, &tmp_c7, &tmp_c8)) {
+				    !gc570d_splitter_cta_physical_address(blk,
+					    &tmp_c7, &tmp_c8)) {
 					cta_blk = blk;
 					cta_has_vsdb = true;
 				} else if (!cta_blk) {
@@ -4400,7 +4401,7 @@ gc570d_splitter_windows_channel2_connect(struct gc570d_dev *gc,
 	 * published (edid_published), disconnecting HDMI OUT must NOT replace
 	 * the published EDID or pulse upstream HPD; capture continues with the
 	 * currently negotiated signal.  Only when no EDID has been published
-	 * yet at startup do we fall through to publish the internal EDID on
+	 * yet at startup do we continue by publishing the internal EDID on
 	 * port 1 (0x6a) so standalone capture works.
 	 */
 	if ((aux03_hpd & 0x03) != 0x03) {
@@ -4436,9 +4437,9 @@ gc570d_splitter_windows_channel2_connect(struct gc570d_dev *gc,
 			    ((aux03_port1 & 0x85) != 0x85 ||
 			     (aux88_p1 & 0x03) != 0x00 ||
 			     (auxc1_p1 & BIT(0)))) {
-				ret = gc570d_splitter_scdt_channel_setup(
-					gc, 1, &gc->splitter_pclk[1],
-					&gc->splitter_vclk[1]);
+				ret = gc570d_splitter_scdt_channel_setup(gc, 1,
+									 &gc->splitter_pclk[1],
+									 &gc->splitter_vclk[1]);
 				if (!ret) {
 					gc->splitter_video_stable_pending = true;
 					gc->splitter_video_stable_mask |= BIT(1);
@@ -4508,8 +4509,7 @@ gc570d_splitter_windows_channel2_connect(struct gc570d_dev *gc,
 				if (edid_published)
 					ret = 0;
 				else
-					ret = gc570d_splitter_windows_edid_publish(
-						gc, true);
+					ret = gc570d_splitter_windows_edid_publish(gc, true);
 			}
 			if (ret)
 				goto out;
@@ -4610,14 +4610,14 @@ gc570d_splitter_windows_channel2_connect(struct gc570d_dev *gc,
 			       &detail13, &last_irq, &last_status);
 	if (!ret && (detail13 & BIT(4))) {
 		if ((aux03_port1 & BIT(0)) && !preserve_hotplug) {
-			(void)gc570d_splitter_scdt_channel_setup(
-				gc, 1, &gc->splitter_pclk[1],
+			(void)gc570d_splitter_scdt_channel_setup(gc, 1,
+				&gc->splitter_pclk[1],
 				&gc->splitter_vclk[1]);
 			stable_mask |= BIT(1);
 		}
 		if (target_port == 2) {
-			(void)gc570d_splitter_scdt_channel_setup(
-				gc, 2, &gc->splitter_pclk[2],
+			(void)gc570d_splitter_scdt_channel_setup(gc, 2,
+				&gc->splitter_pclk[2],
 				&gc->splitter_vclk[2]);
 		}
 		stable_mask |= BIT(target_port);
@@ -5435,7 +5435,7 @@ out:
 			irq_values[1][4]);
 	} else {
 		dev_warn_ratelimited(&gc->pdev->dev,
-			"VideoSplitter Video Stable On IRQ failed at %s: %d main05=%02x active=%02x timer_serviced=%s detail13=%02x aux03=%02x/%02x irq1=%02x/%02x/%02x/%02x/%02x irq2=%02x/%02x/%02x/%02x/%02x\n",
+				     "VideoSplitter Video Stable On IRQ failed at %s: %d main05=%02x active=%02x timer_serviced=%s detail13=%02x aux03=%02x/%02x irq1=%02x/%02x/%02x/%02x/%02x irq2=%02x/%02x/%02x/%02x/%02x\n",
 			stage, ret, main05, active_mask,
 			gc->splitter_main_timer_serviced ? "yes" : "no",
 			detail13, aux03[0], aux03[1],
@@ -6819,16 +6819,15 @@ gc570d_splitter_stable_workers_windows_order(struct gc570d_dev *gc)
 				       0x68 + 2 * port, 0x03, &port_03,
 				       &last_irq, &last_status) &&
 		     (port_03 & 0x85) != 0x85)) {
-			(void)gc570d_splitter_scdt_channel_setup(
-				gc, port, &gc->splitter_pclk[port],
+			(void)gc570d_splitter_scdt_channel_setup(gc, port,
+				&gc->splitter_pclk[port],
 				&gc->splitter_vclk[port]);
 		}
 
 		ret = gc570d_splitter_stable_worker_link_setup_port(gc, port);
 		if (ret == -ENODATA) {
 			msleep(50);
-			ret = gc570d_splitter_stable_worker_link_setup_port(
-				gc, port);
+			ret = gc570d_splitter_stable_worker_link_setup_port(gc, port);
 		}
 		if (ret)
 			goto out;
@@ -6899,6 +6898,8 @@ static bool gc570d_splitter_pump_transient_error(int ret)
  */
 static int gc570d_splitter_windows_state_pump_once(struct gc570d_dev *gc)
 {
+	bool preserve_hotplug =
+		gc->hdmi1_hotplug_policy == GC570D_HOTPLUG_PRESERVE;
 	u8 main05 = 0;
 	u8 worker_state4_mask = gc->splitter_worker_state4_mask;
 	u32 last_irq = 0;
@@ -6939,8 +6940,8 @@ static int gc570d_splitter_windows_state_pump_once(struct gc570d_dev *gc)
 					       0x10, &irq10, &last_irq,
 					       &last_status);
 			if (!ret && (irq10 & 0x03)) {
-				ret = gc570d_splitter_windows_channel2_connect(
-					gc, gc->hdmi1_hotplug_policy == GC570D_HOTPLUG_PRESERVE);
+				ret = gc570d_splitter_windows_channel2_connect(gc,
+									       preserve_hotplug);
 				if (!ret)
 					events++;
 				else if (!first_error &&

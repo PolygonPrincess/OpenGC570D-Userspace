@@ -76,11 +76,20 @@ do
 done
 
 if [ -f "$CHECKOUT_MODULE" ]; then
-	insmod "$CHECKOUT_MODULE" auto_hdmi1="$AUTO_HDMI1" hdmi1_hotplug_policy="$HDMI1_HOTPLUG_POLICY" || die "insmod failed; run make and check dmesg"
+	insmod "$CHECKOUT_MODULE" \
+		auto_hdmi1="$AUTO_HDMI1" \
+		hdmi1_hotplug_policy="$HDMI1_HOTPLUG_POLICY" ||
+		die "insmod failed; run make and check dmesg"
 elif modinfo -k "$KERNEL_RELEASE" gc570d >/dev/null 2>&1; then
-	modprobe gc570d auto_hdmi1="$AUTO_HDMI1" hdmi1_hotplug_policy="$HDMI1_HOTPLUG_POLICY" || die "modprobe failed; check Secure Boot and dmesg"
+	modprobe gc570d \
+		auto_hdmi1="$AUTO_HDMI1" \
+		hdmi1_hotplug_policy="$HDMI1_HOTPLUG_POLICY" ||
+		die "modprobe failed; check Secure Boot and dmesg"
 elif [ -f "$PORTABLE_MODULE" ]; then
-	insmod "$PORTABLE_MODULE" auto_hdmi1="$AUTO_HDMI1" hdmi1_hotplug_policy="$HDMI1_HOTPLUG_POLICY" || die "insmod failed; check vermagic, Secure Boot and dmesg"
+	insmod "$PORTABLE_MODULE" \
+		auto_hdmi1="$AUTO_HDMI1" \
+		hdmi1_hotplug_policy="$HDMI1_HOTPLUG_POLICY" ||
+		die "insmod failed; check vermagic, Secure Boot and dmesg"
 else
 	die "no module for $KERNEL_RELEASE; run make or install-portable.sh"
 fi
@@ -88,7 +97,9 @@ fi
 sleep 1
 grep -q '^gc570d ' /proc/modules || die "module did not remain loaded"
 if [ "$AUTO_HDMI1" -eq 1 ]; then
-	echo "gc570d loaded; HDMI IN 2 is ready and HDMI IN 1/passthrough will initialize automatically (policy: $HDMI1_HOTPLUG_POLICY)"
+	printf '%s%s\n' \
+		'gc570d loaded; HDMI IN 2 is ready and HDMI IN 1/passthrough ' \
+		"will initialize automatically (policy: $HDMI1_HOTPLUG_POLICY)"
 else
 	echo "gc570d loaded in HDMI IN 2-only mode"
 fi

@@ -10,9 +10,9 @@ module_param(auto_hdmi1, bool, 0444);
 MODULE_PARM_DESC(auto_hdmi1,
 		 "initialize HDMI IN 1 and passthrough automatically (default: true)");
 
-enum gc570d_hdmi1_hotplug_policy hdmi1_hotplug_policy = GC570D_HOTPLUG_PRESERVE;
-static char *hdmi1_hotplug_policy_str = "preserve";
-module_param_named(hdmi1_hotplug_policy, hdmi1_hotplug_policy_str, charp, 0444);
+static char *hdmi1_hotplug_policy_param = "preserve";
+module_param_named(hdmi1_hotplug_policy, hdmi1_hotplug_policy_param, charp,
+		   0444);
 MODULE_PARM_DESC(hdmi1_hotplug_policy,
 		 "HDMI IN 1 hotplug policy: \"preserve\" (default) or \"renegotiate\"");
 
@@ -357,8 +357,9 @@ static void gc570d_hdmi1_auto_work(struct work_struct *work)
 		}
 		break;
 	case GC570D_HDMI1_AUTO_CONNECT:
-		ret = gc570d_splitter_windows_channel2_connect(
-			gc, gc->hdmi1_hotplug_policy == GC570D_HOTPLUG_PRESERVE);
+		ret = gc570d_splitter_windows_channel2_connect(gc,
+							       gc->hdmi1_hotplug_policy ==
+							       GC570D_HOTPLUG_PRESERVE);
 		if (!ret || ret == -ENOLINK || ret == -ENODATA) {
 			ret = 0;
 			gc->hdmi1_auto_phase = GC570D_HDMI1_AUTO_RECEIVER_EVENT;
@@ -528,17 +529,16 @@ static int gc570d_probe(struct pci_dev *pdev,
 				     "failed to map BAR0\n");
 
 	gc->pdev = pdev;
-	if (!hdmi1_hotplug_policy_str ||
-	    !strcmp(hdmi1_hotplug_policy_str, "preserve")) {
+	if (!hdmi1_hotplug_policy_param ||
+	    !strcmp(hdmi1_hotplug_policy_param, "preserve")) {
 		gc->hdmi1_hotplug_policy = GC570D_HOTPLUG_PRESERVE;
-	} else if (!strcmp(hdmi1_hotplug_policy_str, "renegotiate")) {
+	} else if (!strcmp(hdmi1_hotplug_policy_param, "renegotiate")) {
 		gc->hdmi1_hotplug_policy = GC570D_HOTPLUG_RENEGOTIATE;
 	} else {
 		return dev_err_probe(&pdev->dev, -EINVAL,
 				     "invalid hdmi1_hotplug_policy '%s' (expected 'preserve' or 'renegotiate')\n",
-				     hdmi1_hotplug_policy_str);
+				     hdmi1_hotplug_policy_param);
 	}
-	hdmi1_hotplug_policy = gc->hdmi1_hotplug_policy;
 	mutex_init(&gc->i2c_lock);
 	mutex_init(&gc->capture_lock);
 	mutex_init(&gc->video_lock);
