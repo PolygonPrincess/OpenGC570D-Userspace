@@ -100,11 +100,24 @@ physically validated for HDMI IN 1 and HDMI IN 2 without STREAMOFF, closing
 the capture client, or selecting the device again. The HDMI IN 1 cycle was also
 validated while HDMI IN 2 remained open and live: its passthrough and capture
 recovered after HDMI renegotiation while the original V4L2 stream stayed open.
-HDMI IN 1 audio follows the same open-stream lifecycle. During link loss its
-PCM remains alive and supplies silence; after video becomes stable the driver
-restarts only HDMI IN 1 audio DMA and real stereo audio returns without closing
-the audio client or selecting the source again. This video-and-audio recovery
-was physically validated while HDMI IN 2 continued operating.
+HDMI IN 1 audio follows the same open-stream lifecycle. The driver does not add
+or rewrite multichannel EDID data: normal passthrough uses the vendor bridge
+EDID, which already advertises 8-channel LPCM and the 5.1/7.1 speaker layout.
+The receiver accepts 2-channel stereo as well as multichannel (5.1/7.1, up to
+8-channel) 48000 Hz uncompressed LPCM for passthrough to HDMI OUT while routing
+the front left/right stereo pair (`SD0`) to the `HDMI 1 (Passthrough)` ALSA
+capture device (`S16_LE`, 48000 Hz, 2 channels). Only 5.1 passthrough with
+simultaneous stereo capture has been physically validated; 7.1 passthrough and
+isolated audio cold start remain unvalidated. Although the bridge EDID
+advertises the baseline CTA-861 LPCM sample rates (32/44.1/48 kHz) and no
+compressed audio formats, the FPGA capture path and ALSA constraints operate
+strictly at 48000 Hz LPCM; 32 kHz and 44.1 kHz LPCM sources (or forced non-LPCM
+bitstreams) are rejected by the capture path with a ratelimited kernel warning.
+During link loss or dynamic stereo/surround format transitions, the PCM stream
+remains alive and supplies silence while the receiver relocks, then
+automatically restarts HDMI IN 1 audio DMA so live audio returns without closing
+the audio client or reselecting the source. This recovery was physically
+validated while HDMI IN 2 continued operating.
 
 Under the default `preserve` policy (`hdmi1_hotplug_policy=preserve`), connecting
 or disconnecting an HDMI OUT monitor never pulses upstream HPD or interrupts

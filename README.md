@@ -55,7 +55,7 @@ Validated on the project hardware:
 | HDMI IN 1 high-resolution capture | 2160p60 SDR/HDR, 1440p60 SDR/HDR and measured 1440p120 HDR input converted to 1920x1080 YUYV SDR at 60 fps |
 | HDMI IN 1 native capture | 1280x720p60 SDR input captured as 1280x720 YUYV at 60 fps; 720x480p59.94/60 SDR input from a RetroScaler2x captured as 720x480 YUYV and displayed at its intended 4:3 aspect ratio |
 | HDMI IN 2 capture | 1920x1080 YUYV at 60 fps |
-| HDMI IN 1 audio | `HDMI 1 (Passthrough)`, ALSA capture device 1, stereo S16_LE at 48 kHz; direct ALSA and PipeWire validated, including automatic recovery on the same open audio stream after disconnect/reconnect |
+| HDMI IN 1 audio | `HDMI 1 (Passthrough)`, ALSA capture device 1, stereo S16_LE at 48 kHz, including front left/right capture during 5.1 LPCM passthrough to HDMI OUT; the vendor bridge EDID also advertises 7.1 LPCM, which is not yet physically validated; direct ALSA and PipeWire validated, including automatic recovery on the same open audio stream across disconnect/reconnect and stereo/surround transitions |
 | HDMI IN 2 audio | `HDMI 2 (Capture Only)`, ALSA capture device 0, stereo S16_LE at 48 kHz; direct ALSA and PipeWire validated |
 | Concurrent operation | Both V4L2 streams and both audio inputs active together through the tested ALSA/PipeWire path |
 | Hot-plug and disconnected inputs | Both V4L2 nodes concurrently supply the built-in generic no-signal frame at 1920x1080 YUYV/60 fps without video DMA; HDMI IN 1 and HDMI IN 2 each physically passed a complete live-to-placeholder-to-live cycle on the same open V4L2 stream, including HDMI IN 1 video and audio recovery while HDMI IN 2 remained active |
