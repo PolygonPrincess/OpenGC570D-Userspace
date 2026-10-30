@@ -714,6 +714,59 @@ static int gc570d_it6802_read_page(struct gc570d_dev *gc, u8 page,
 	return ret ? ret : restore_ret;
 }
 
+/*
+ * The IT6802 does not expose a directly measured frame rate.  Its AVI VIC
+ * identifies the CEA mode, which is sufficient for the 50/60 Hz reporting
+ * distinction this driver needs.  Zero means "unknown"; callers then fall
+ * back to the configured capture interval instead of inventing a cadence.
+ */
+static u16 gc570d_vic_frame_rate(u8 vic)
+{
+	switch (vic) {
+	case 1 ... 16:
+	case 35 ... 36:
+		return 60;
+	case 17 ... 31:
+	case 37 ... 39:
+		return 50;
+	case 32:
+	case 60:
+		return 24;
+	case 33:
+	case 61:
+		return 25;
+	case 34:
+	case 62:
+		return 30;
+	case 40 ... 45:
+	case 64:
+		return 100;
+	case 46 ... 51:
+	case 63:
+		return 120;
+	case 52 ... 55:
+		return 200;
+	case 56 ... 59:
+		return 240;
+	default:
+		return 0;
+	}
+}
+
+int gc570d_it6802_frame_rate(struct gc570d_dev *gc, u16 *frame_rate)
+{
+	u8 vic;
+	int ret;
+
+	if (!frame_rate)
+		return -EINVAL;
+	ret = gc570d_it6802_read_page(gc, 2, 0x18, &vic);
+	if (ret)
+		return ret;
+	*frame_rate = gc570d_vic_frame_rate(vic);
+	return 0;
+}
+
 static int gc570d_it6802_write_csc(struct gc570d_dev *gc,
 				    const u8 *matrix, size_t size)
 {
@@ -784,6 +837,15 @@ int gc570d_it6802_format_init(struct gc570d_dev *gc)
 			!(0x0fff3c787fe6ffceULL & BIT_ULL(avi_vic));
 	}
 	limited = ((avi_quantization >> 2) & 0x03) == 1;
+	/*
+	 * Publish the source's own colour description for V4L2.  YCbCr video
+	 * defaults to limited range when the AVI Q field is unspecified; RGB is
+	 * full range unless the source explicitly says otherwise.
+	 */
+	gc->video_input_colorimetry = avi_colorimetry >> 6;
+	gc->video_input_limited = input_mode ?
+		(((avi_quantization >> 2) & 0x03) != 2) : limited;
+	gc->video_input_frame_rate = gc570d_vic_frame_rate(avi_vic);
 
 	/* The official driver clears reg71[2] before selecting the physical output mode. */
 	ret = gc570d_receiver_update8(gc, bus, 0x71, BIT(2), 0);
@@ -1751,6 +1813,7 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	u8 extended_colorimetry;
 	bool hdr_bt2020;
 	u8 reg19 = 0;
+	bool limited;
 	u8 c5;
 	u8 c6;
 	u8 avmute_packet;
@@ -1807,6 +1870,13 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	input_color = (avi15 >> 5) & 0x03;
 	colorimetry = avi16 >> 6;
 	extended_colorimetry = (avi17 >> 4) & 0x07;
+	/*
+	 * YCbCr video defaults to limited range when AVI Q is unspecified; RGB
+	 * defaults to full range and is only limited when Q says so.
+	 */
+	limited = input_color ? (((avi17 >> 2) & 0x03) != 2) :
+				(((avi17 >> 2) & 0x03) == 1);
+	WRITE_ONCE(gc->video0_receiver_limited, limited);
 	hdr_bt2020 = colorimetry == 3 &&
 		(extended_colorimetry == 5 || extended_colorimetry == 6);
 
@@ -1982,7 +2052,8 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	 * 0x33 path.  For HDR BT.2020 and 4:2:2/4:4:4 SDR YCbCr inputs (such as
 	 * 480p/576p/720p/1080i/1080p YCbCr upscalers and consoles), drive the
 	 * IT68051 output bus as RGB444 (output_color = 0) with the hardware
-	 * YCbCr-to-RGB CSC.
+	 * YCbCr-to-RGB CSC (whose 0x04/-16 offset and 0x094f/1.164 gain convert
+	 * limited-range YCbCr to full-range RGB).
 	 */
 	output_color = (input_color == 3 && !hdr_bt2020) ? 2 : 0;
 	ret = gc570d_it68051_select_page(gc, 0);

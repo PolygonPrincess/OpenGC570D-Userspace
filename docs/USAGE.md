@@ -27,13 +27,29 @@ done
 Expected names are `gc570d-hdmi2` and `gc570d-hdmi1`.
 
 Both V4L2 nodes publish the recovered discrete YUYV capture sizes (`1920x1080`,
-`1280x720`, `1024x768`, `720x576` at 50 fps, `720x480`, and `640x480`).
-HDMI IN 1 supports `2160p`, `1440p`, `1080p`, `1080i`, `720p`, `576p`, and `480p`
-inputs (downscaling `2160p`/`1440p` to `1920x1080` in the Xilinx stage and
-capturing `1080p`-or-lower natively or through the `VIP0` hardware scaler).
-HDMI IN 2 supports `1080p`, `1080i`, `720p`, `576p`, and `480p` inputs natively
-or scaled through the `VIP1` hardware scaler.
+`1280x720`, `1024x768`, `720x576`, `720x480`, and `640x480`). The capture rate
+follows the source, so the same size can run at 50 or 60 Hz; do not infer a
+frame rate from the output geometry. `VIDIOC_G_PARM` and
+`VIDIOC_ENUM_FRAMEINTERVALS` report the source cadence for every advertised
+size. HDMI IN 1 uses measured receiver timing and caps higher-rate inputs at
+60 fps. HDMI IN 2 decodes the CEA AVI VIC for standard video modes. VIP0/VIP1
+perform spatial scaling only; they do not convert frame rate.
 
+* **HDMI IN 1 (`gc570d-hdmi1`)**: Downscales `2160p` and `1440p` inputs to
+  `1920x1080` in the `Xilinx` preprocessing stage and captures `1080p`, `1080i`,
+  `1024x768`, `720p`, `576p`, and `480p` inputs at their native hardware
+  geometry without software scaling. `1080i` uses the recovered hardware field
+  handling and is reported with `V4L2_FIELD_INTERLACED`. When capturing
+  sub-1080p signals on HDMI IN 1 in applications such as OBS, select the matching
+  source resolution in the V4L2 capture properties.
+* **HDMI IN 2 (`gc570d-hdmi2`)**: Supports `1080p`, `1080i`, `1024x768`, `720p`,
+  `576p`, and `480p` inputs either at their native resolution or hardware-scaled
+  to the negotiated V4L2 resolution (such as `1920x1080`) through the `VIP1`
+  hardware scaler. `VIP1` reconstructs progressive frames, so `1080i` and the
+  scaled outputs are reported as `V4L2_FIELD_NONE`.
+
+`576p50` is implemented but remains unvalidated until a physical 50 Hz source
+is tested.
 Example query:
 
 ```sh
@@ -41,9 +57,10 @@ v4l2-ctl -d /dev/video1 --list-formats-ext
 v4l2-ctl -d /dev/video2 --list-formats-ext
 ```
 
-For simultaneous capture, start HDMI IN 2 first, wait for it to stream, and
-then start HDMI IN 1. Reverse order is intentionally rejected because it has
-not yet been safely validated.
+For simultaneous capture, the two nodes may be started in either order. The
+physically validated sequence is HDMI IN 2 first, wait for it to stream, then
+HDMI IN 1; starting HDMI IN 1 first is supported by preserving the shared VIP
+registers while the other channel is active.
 
 ## Video4Linux2 capture
 
@@ -213,9 +230,10 @@ no application is recording it.
 
 OBS was the original target application and is useful as an integration test,
 but it is not required to use the driver. For a simultaneous test, add both
-V4L2 devices in the required HDMI IN 2 then HDMI IN 1 order, then select the
-two PulseAudio-compatible HDMI sources. This verifies that a streaming client
-can keep both video nodes and both desktop-audio sources active together.
+V4L2 devices (the physically validated order is HDMI IN 2 then HDMI IN 1),
+then select the two PulseAudio-compatible HDMI sources. This verifies that a
+streaming client can keep both video nodes and both desktop-audio sources
+active together.
 
 ## RGB enclosure lighting
 
