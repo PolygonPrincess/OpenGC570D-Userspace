@@ -21,6 +21,10 @@ see [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the requested report details.
 | HDMI IN 2 1080i, 720p, 480p, and 1024x768 capture and VIP1 hardware scaling | Physically validated both at native geometry and hardware-scaled to `1920x1080`, including automatic VIP1 reinitialization across live source resolution changes; 1080i is reconstructed as progressive `V4L2_FIELD_NONE` |
 | HDMI IN 1 and HDMI IN 2 576p50 capture | Implemented in the format tables and VIP0/VIP1 scaler paths; 576p50 remains unvalidated until a physical 50 Hz source is tested |
 | HDMI IN 1 stereo S16_LE/48 kHz ALSA | Physically validated |
+| HDMI IN 1 native 720p60 SDR capture | Physically validated |
+| HDMI IN 1 5.1 LPCM passthrough with stereo ALSA capture | Physically validated on Nintendo Switch 2: 5.1 LPCM passthrough to HDMI OUT with simultaneous stereo S16_LE/48 kHz capture (front left/right via I2S SD0) and automatic open-stream recovery across 5.1 <-> stereo transitions |
+| HDMI IN 1 7.1 LPCM passthrough | Unvalidated; the vendor bridge EDID advertises 8-channel LPCM, but only 5.1 was physically tested |
+| HDMI IN 1 isolated audio cold start | Unvalidated; the settled-format handshake was exercised across live stereo/surround transitions, not as a standalone cold start |
 | Both V4L2 streams, HDMI 2 then HDMI 1 | Physically validated |
 | Both V4L2 streams, HDMI 1 then HDMI 2 | Implemented by preserving shared VIP colour/bypass state; reverse order is accepted |
 | Source-rate reporting in `VIDIOC_G_PARM`/`VIDIOC_ENUM_FRAMEINTERVALS` | Cadence is reported per source, not per output size: HDMI IN 1 uses measured receiver timing and HDMI IN 2 maps the AVI VIC to the CEA 24/25/30/50/60/100/120/200/240 Hz families. 50 Hz and 60 Hz capture paths are implemented; 60 Hz is physically validated and 50 Hz reporting (including 576p50) awaits a physical 50 Hz source test |

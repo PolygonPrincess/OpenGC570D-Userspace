@@ -937,6 +937,7 @@ int gc570d_audio0_recover_locked(struct gc570d_dev *gc)
 		memset(gc->audio0_pcm_buffer_cpu[i], GC570D_AUDIO_SENTINEL,
 		       GC570D_AUDIO_BUFFER_SIZE);
 	writel(0, gc->bar0 + GC570D_AUDIO0_FORMAT);
+	writel(0, gc->bar0 + GC570D_AUDIO_GLOBAL_FORMAT);
 	writel(GC570D_AUDIO_PERIOD_FRAMES, gc->bar0 + GC570D_AUDIO0_RATE);
 	writel(lower_32_bits(gc->audio0_pcm_buffer_dma[0]),
 	       gc->bar0 + GC570D_AUDIO0_BUFFER0);
