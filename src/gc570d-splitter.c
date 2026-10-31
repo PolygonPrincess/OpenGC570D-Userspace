@@ -3,6 +3,8 @@
  * HDMI splitter and passthrough state machine, including EDID, HPD, TMDS/SCDC,
  * output format, equalization, and transmitter diagnostics.
  */
+#include <linux/bitops.h>
+
 #include "gc570d.h"
 
 static int gc570d_splitter_status_show(struct seq_file *s, void *unused)
@@ -7562,22 +7564,18 @@ static unsigned int gc570d_it68051_audio_rate(u8 b5, u8 b6)
 
 static unsigned int gc570d_it68051_audio_channels(u8 b1)
 {
-	switch (b1 & 0x3f) {
-	case 0x01:
+	u8 mask = b1 & 0x3f;
+
+	/*
+	 * The recovered vendor routine derives the channel count from the
+	 * complete low six-bit layout mask as 2 * fls(mask).  Layout 0
+	 * (mask 0x00) does not fit that formula; it is the value observed for
+	 * FL/FR stereo on this hardware, so map it to 2 channels explicitly.
+	 * Do not guess at partial masks outside the vendor mapping.
+	 */
+	if (!mask)
 		return 2;
-	case 0x03:
-		return 4;
-	case 0x07:
-		return 6;
-	case 0x0f:
-		return 8;
-	case 0x1f:
-		return 10;
-	case 0x3f:
-		return 12;
-	default:
-		return 0;
-	}
+	return 2 * fls(mask);
 }
 
 static int gc570d_it68051_audio_status_show(struct seq_file *s, void *unused)
@@ -7636,8 +7634,7 @@ out_restore:
 	seq_printf(s,
 		   "receiver=IT68051 channel=0 error=%d scdt=%s ready=%s lpcm=%s hbr=%s dsd=%s channels=%u rate=%u output=%s\n",
 		   ret, page0[0] & BIT(7) ? "yes" : "no",
-		   (page0[0] & BIT(7)) && !(page0[1] & BIT(7)) &&
-		   (page0[6] & BIT(7)) ? "yes" : "no",
+		   (page0[0] & BIT(7)) && (page0[6] & BIT(7)) ? "yes" : "no",
 		   !(page0[5] & GENMASK(7, 4)) ? "yes" : "no",
 		   page0[5] & BIT(6) ? "yes" : "no",
 		   page0[5] & BIT(7) ? "yes" : "no", channels, rate,
@@ -7657,6 +7654,12 @@ int gc570d_it68051_audio_output_set(struct gc570d_dev *gc,
 						    bool enable)
 {
 	const struct gc570d_i2c_bus *bus = &gc570d_receiver_buses[0];
+	u8 prev_b0 = 0;
+	u8 prev_b1 = 0;
+	u8 prev_b5 = 0;
+	u8 prev_b6 = 0;
+	bool prev_ready = false;
+	bool saw_ready = false;
 	u8 reg19;
 	u8 reg10;
 	u8 regb0;
@@ -7667,6 +7670,8 @@ int gc570d_it68051_audio_output_set(struct gc570d_dev *gc,
 	u8 old_c7 = 0;
 	u32 last_irq;
 	u32 last_status;
+	unsigned int channels = 0;
+	unsigned int rate = 0;
 	unsigned int i;
 	int restore_ret;
 	int ret;
@@ -7697,8 +7702,87 @@ int gc570d_it68051_audio_output_set(struct gc570d_dev *gc,
 	IT68051_AUDIO_READ(0x10, reg10);
 	IT68051_AUDIO_READ(0xb1, regb1);
 	if (!(reg19 & BIT(7))) {
+		dev_dbg(&gc->pdev->dev,
+			"IT68051 audio SCDT not present: reg19=%02x regb1=%02x\n",
+			reg19, regb1);
 		ret = -ENODATA;
 		goto out_restore_output;
+	}
+
+	/*
+	 * Clear any sticky W1C audio-change event (0x10[7]) once at entry
+	 * with a direct write (not read-modify-write).  When switching
+	 * between multichannel (5.1/7.1) and 2.0 stereo LPCM, 0xb0/0xb1/
+	 * 0xb5/0xb6 may still be settling while 0xb1[7] is asserted; poll
+	 * up to 300 ms until a supported format holds in a single pass or
+	 * two consecutive ready passes report the same unsupported format.
+	 * If 0xb1[7] is not asserted prior to RequestAudio (e.g. cold start
+	 * before the 0x8c[4] pulse), continue to RequestAudio and let the
+	 * post-pulse check decide.
+	 *
+	 * Worst case, when no audio-ready is ever asserted while SCDT is
+	 * present, this holds capture_lock for about 400 ms (300 ms poll,
+	 * 80 ms WaitForReady, 20 ms W1C retry) plus I2C time.
+	 */
+	if (reg10 & BIT(7)) {
+		ret = gc570d_receiver_write8(gc, bus, 0x10, BIT(7));
+		if (ret)
+			goto out_restore_output;
+	}
+	for (i = 0; i < 15; i++) {
+		IT68051_AUDIO_READ(0x19, reg19);
+		IT68051_AUDIO_READ(0xb0, regb0);
+		IT68051_AUDIO_READ(0xb1, regb1);
+		IT68051_AUDIO_READ(0xb5, regb5);
+		IT68051_AUDIO_READ(0xb6, regb6);
+		if (!(reg19 & BIT(7)))
+			break;
+		channels = gc570d_it68051_audio_channels(regb1);
+		rate = gc570d_it68051_audio_rate(regb5, regb6);
+		if (regb1 & BIT(7)) {
+			saw_ready = true;
+			if (!(regb0 & GENMASK(7, 4)) &&
+			    channels >= 2 && channels <= 8 &&
+			    rate == GC570D_AUDIO_RATE_HZ)
+				break;
+			if (prev_ready && regb0 == prev_b0 &&
+			    regb1 == prev_b1 && regb5 == prev_b5 &&
+			    regb6 == prev_b6)
+				break;
+			prev_ready = true;
+			prev_b0 = regb0;
+			prev_b1 = regb1;
+			prev_b5 = regb5;
+			prev_b6 = regb6;
+		} else {
+			prev_ready = false;
+		}
+		msleep(20);
+	}
+	if (!(reg19 & BIT(7))) {
+		dev_dbg(&gc->pdev->dev,
+			"IT68051 audio SCDT not present: reg19=%02x regb1=%02x\n",
+			reg19, regb1);
+		ret = -ENODATA;
+		goto out_restore_output;
+	}
+	if (saw_ready && (regb1 & BIT(7))) {
+		if (regb0 & GENMASK(7, 4)) {
+			dev_warn_ratelimited(&gc->pdev->dev,
+					     "IT68051 non-LPCM audio stream rejected: regb0=%02x regb1=%02x\n",
+					     regb0, regb1);
+			ret = -EOPNOTSUPP;
+			goto out_restore_output;
+		}
+		if (channels < 2 || channels > 8 ||
+		    rate != GC570D_AUDIO_RATE_HZ) {
+			dev_warn_ratelimited(&gc->pdev->dev,
+					     "IT68051 unsupported LPCM audio format: channels=%u rate=%u (regb1=%02x regb5=%02x regb6=%02x)\n",
+					     channels, rate, regb1, regb5,
+					     regb6);
+			ret = -ERANGE;
+			goto out_restore_output;
+		}
 	}
 
 	/* RequestAudio: disable forced audio and mute the receiver pins. */
@@ -7712,7 +7796,7 @@ int gc570d_it68051_audio_output_set(struct gc570d_dev *gc,
 	if (ret)
 		goto out_restore_output;
 
-	/* WaitForReady: exact page-0 0x8c[4] pulse, then four 20-ms ticks. */
+	/* WaitForReady: exact page-0 0x8c[4] pulse, 80-ms wait, and optional 20-ms W1C clear. */
 	ret = gc570d_it68051_select_page(gc, 0);
 	if (ret)
 		goto out_restore_output;
@@ -7732,23 +7816,44 @@ int gc570d_it68051_audio_output_set(struct gc570d_dev *gc,
 	if (ret)
 		goto out_restore_output;
 	msleep(80);
-	IT68051_AUDIO_READ(0x19, reg19);
 	IT68051_AUDIO_READ(0x10, reg10);
-	IT68051_AUDIO_READ(0xb0, regb0);
+	if (reg10 & BIT(7)) {
+		ret = gc570d_receiver_write8(gc, bus, 0x10, BIT(7));
+		if (ret)
+			goto out_restore_output;
+		msleep(20);
+	}
+	IT68051_AUDIO_READ(0x19, reg19);
 	IT68051_AUDIO_READ(0xb1, regb1);
-	IT68051_AUDIO_READ(0xb5, regb5);
-	IT68051_AUDIO_READ(0xb6, regb6);
-	if (!(reg19 & BIT(7)) || (reg10 & BIT(7)) || !(regb1 & BIT(7))) {
+	if (!(reg19 & BIT(7)) || !(regb1 & BIT(7))) {
+		dev_dbg(&gc->pdev->dev,
+			"IT68051 audio not ready after reset: reg19=%02x regb1=%02x\n",
+			reg19, regb1);
 		ret = -ENODATA;
 		goto out_restore_output;
 	}
+	IT68051_AUDIO_READ(0xb0, regb0);
+	IT68051_AUDIO_READ(0xb5, regb5);
+	IT68051_AUDIO_READ(0xb6, regb6);
+	channels = gc570d_it68051_audio_channels(regb1);
+	rate = gc570d_it68051_audio_rate(regb5, regb6);
 	if (regb0 & GENMASK(7, 4)) {
+		dev_warn_ratelimited(&gc->pdev->dev,
+				     "IT68051 non-LPCM audio stream rejected: regb0=%02x regb1=%02x\n",
+				     regb0, regb1);
 		ret = -EOPNOTSUPP;
 		goto out_restore_output;
 	}
-	if (gc570d_it68051_audio_channels(regb1) != 2 ||
-	    gc570d_it68051_audio_rate(regb5, regb6) !=
-	    GC570D_AUDIO_RATE_HZ) {
+	/*
+	 * Allow 2-channel stereo as well as multichannel (5.1/7.1, up to 8ch)
+	 * 48 kHz LPCM so surround-sound passthrough to HDMI OUT keeps HDMI IN 1
+	 * I2S SD0 stereo capture (front left/right) active instead of failing
+	 * with -ERANGE.
+	 */
+	if (channels < 2 || channels > 8 || rate != GC570D_AUDIO_RATE_HZ) {
+		dev_warn_ratelimited(&gc->pdev->dev,
+				     "IT68051 unsupported LPCM audio format: channels=%u rate=%u (regb1=%02x regb5=%02x regb6=%02x)\n",
+				     channels, rate, regb1, regb5, regb6);
 		ret = -ERANGE;
 		goto out_restore_output;
 	}
@@ -7770,7 +7875,8 @@ int gc570d_it68051_audio_output_set(struct gc570d_dev *gc,
 		ret = gc570d_receiver_write8(gc, bus, 0xc7, 0x00);
 	if (!ret)
 		dev_info(&gc->pdev->dev,
-			 "IT68051 LPCM output enabled: channels=2 rate=48000 p1_c7=00\n");
+			 "IT68051 LPCM output enabled: channels=%u rate=%u p1_c7=00\n",
+			 channels, rate);
 	goto out_restore_page;
 
 out_restore_output:

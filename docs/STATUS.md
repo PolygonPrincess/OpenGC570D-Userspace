@@ -18,7 +18,9 @@ see [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the requested report details.
 | HDMI IN 1 1440p60 SDR/HDR to 1080p60 SDR capture | Physically validated |
 | HDMI IN 1 measured 1440p120 HDR to 1080p60 SDR capture | Physically validated |
 | HDMI IN 1 native 720p60 SDR capture | Physically validated |
-| HDMI IN 1 stereo S16_LE/48 kHz ALSA | Physically validated |
+| HDMI IN 1 5.1 LPCM passthrough with stereo ALSA capture | Physically validated on Nintendo Switch 2: 5.1 LPCM passthrough to HDMI OUT with simultaneous stereo S16_LE/48 kHz capture (front left/right via I2S SD0) and automatic open-stream recovery across 5.1 <-> stereo transitions |
+| HDMI IN 1 7.1 LPCM passthrough | Unvalidated; the vendor bridge EDID advertises 8-channel LPCM, but only 5.1 was physically tested |
+| HDMI IN 1 isolated audio cold start | Unvalidated; the settled-format handshake was exercised across live stereo/surround transitions, not as a standalone cold start |
 | Both V4L2 streams, HDMI 2 then HDMI 1 | Physically validated |
 | Both ALSA/PipeWire sources in OBS | Physically validated |
 | Saved OBS scene restoring both videos and both audios | Physically validated without manually reordering or recreating sources; both PCM workers running, both video DMAs advancing, four shared-IRQ owners and zero unknown IRQs |
