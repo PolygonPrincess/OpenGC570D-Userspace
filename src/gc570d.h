@@ -314,8 +314,6 @@ struct gc570d_dev {
 	u16 video_input_width;
 	u16 video_input_height;
 	u16 video_input_frame_rate;
-	u8 video_input_colorimetry;
-	bool video_input_limited;
 	bool video_input_interlaced;
 	bool video_streaming;
 	bool video_stopping;
@@ -348,7 +346,6 @@ struct gc570d_dev {
 	bool video0_input_interlaced;
 	bool video0_receiver_output_valid;
 	bool video0_receiver_interlaced;
-	bool video0_receiver_limited;
 	bool video0_reconfigure_pending;
 	u16 video0_receiver_width;
 	u16 video0_receiver_height;

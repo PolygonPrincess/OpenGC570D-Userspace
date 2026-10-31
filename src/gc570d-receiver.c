@@ -837,14 +837,6 @@ int gc570d_it6802_format_init(struct gc570d_dev *gc)
 			!(0x0fff3c787fe6ffceULL & BIT_ULL(avi_vic));
 	}
 	limited = ((avi_quantization >> 2) & 0x03) == 1;
-	/*
-	 * Publish the source's own colour description for V4L2.  YCbCr video
-	 * defaults to limited range when the AVI Q field is unspecified; RGB is
-	 * full range unless the source explicitly says otherwise.
-	 */
-	gc->video_input_colorimetry = avi_colorimetry >> 6;
-	gc->video_input_limited = input_mode ?
-		(((avi_quantization >> 2) & 0x03) != 2) : limited;
 	gc->video_input_frame_rate = gc570d_vic_frame_rate(avi_vic);
 
 	/* The official driver clears reg71[2] before selecting the physical output mode. */
@@ -1813,7 +1805,6 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	u8 extended_colorimetry;
 	bool hdr_bt2020;
 	u8 reg19 = 0;
-	bool limited;
 	u8 c5;
 	u8 c6;
 	u8 avmute_packet;
@@ -1870,13 +1861,6 @@ int gc570d_it68051_video_output_on(struct gc570d_dev *gc)
 	input_color = (avi15 >> 5) & 0x03;
 	colorimetry = avi16 >> 6;
 	extended_colorimetry = (avi17 >> 4) & 0x07;
-	/*
-	 * YCbCr video defaults to limited range when AVI Q is unspecified; RGB
-	 * defaults to full range and is only limited when Q says so.
-	 */
-	limited = input_color ? (((avi17 >> 2) & 0x03) != 2) :
-				(((avi17 >> 2) & 0x03) == 1);
-	WRITE_ONCE(gc->video0_receiver_limited, limited);
 	hdr_bt2020 = colorimetry == 3 &&
 		(extended_colorimetry == 5 || extended_colorimetry == 6);
 

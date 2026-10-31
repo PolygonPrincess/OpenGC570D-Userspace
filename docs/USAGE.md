@@ -31,9 +31,14 @@ Both V4L2 nodes publish the recovered discrete YUYV capture sizes (`1920x1080`,
 follows the source, so the same size can run at 50 or 60 Hz; do not infer a
 frame rate from the output geometry. `VIDIOC_G_PARM` and
 `VIDIOC_ENUM_FRAMEINTERVALS` report the source cadence for every advertised
-size. HDMI IN 1 uses measured receiver timing and caps higher-rate inputs at
-60 fps. HDMI IN 2 decodes the CEA AVI VIC for standard video modes. VIP0/VIP1
-perform spatial scaling only; they do not convert frame rate.
+size. HDMI IN 1 normalizes measured receiver timing to the 24/25/30/50/60 Hz
+families with a ±3 Hz tolerance and caps higher-rate inputs at 60 fps. HDMI IN 2
+decodes the CEA AVI VIC for standard video modes. VIP0/VIP1 perform spatial
+scaling only; they do not convert frame rate. The colorspace, YCbCr encoding,
+quantization, and transfer function reported by `VIDIOC_G_FMT`/`VIDIOC_TRY_FMT`
+describe the packed DMA buffer, not the HDMI source: HDR is tone mapped to SDR
+and source YCbCr is converted before capture, so HD sizes report BT.709 limited
+range and SD sizes report BT.601 limited range.
 
 * **HDMI IN 1 (`gc570d-hdmi1`)**: Downscales `2160p` and `1440p` inputs to
   `1920x1080` in the `Xilinx` preprocessing stage and captures `1080p`, `1080i`,

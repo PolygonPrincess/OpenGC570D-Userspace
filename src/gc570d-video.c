@@ -499,7 +499,7 @@ static int gc570d_video_thread(void *data)
 
 		if (READ_ONCE(gc->video_no_signal)) {
 			gc570d_no_signal_pace(gc->video_frame_interval,
-					       &no_signal_deadline);
+					      &no_signal_deadline);
 			if (READ_ONCE(gc->video_stopping) ||
 			    kthread_should_stop()) {
 				vb2_buffer_done(&buffer->vb.vb2_buf,
@@ -741,8 +741,8 @@ static int gc570d_video_start_streaming(struct vb2_queue *queue,
 
 		if (audio_ret)
 			dev_warn_ratelimited(&gc->pdev->dev,
-				"HDMI IN 2 video started but audio restore is pending: %d\n",
-				audio_ret);
+					     "HDMI IN 2 video started but audio restore is pending: %d\n",
+					     audio_ret);
 	}
 	if (!no_signal) {
 		ret = gc570d_vip_init(gc);
@@ -754,7 +754,7 @@ static int gc570d_video_start_streaming(struct vb2_queue *queue,
 	if (no_signal) {
 		gc->video_no_signal_frame =
 			gc570d_no_signal_frame_create(gc->video_width,
-						       gc->video_height);
+						      gc->video_height);
 		if (IS_ERR(gc->video_no_signal_frame)) {
 			ret = PTR_ERR(gc->video_no_signal_frame);
 			gc->video_no_signal_frame = NULL;
@@ -933,24 +933,10 @@ gc570d_video0_find_format(u32 width, u32 height)
 }
 
 static void gc570d_video0_fill_format(struct gc570d_dev *gc,
-				       struct v4l2_pix_format *pix,
-				       u16 width, u16 height, bool hdmi0)
+				      struct v4l2_pix_format *pix,
+				      u16 width, u16 height, bool hdmi0)
 {
-	u8 colorimetry = hdmi0 ? READ_ONCE(gc->video0_receiver_colorimetry) :
-				 READ_ONCE(gc->video_input_colorimetry);
-	bool limited = hdmi0 ? READ_ONCE(gc->video0_receiver_limited) :
-			       READ_ONCE(gc->video_input_limited);
-	bool no_signal = hdmi0 ? READ_ONCE(gc->video0_no_signal) :
-				 READ_ONCE(gc->video_no_signal);
-	bool bt2020 = colorimetry == 3;
-	/*
-	 * The receiver decoders use the vendor mapping where AVI C=1 selects
-	 * BT.601 and C=2 selects BT.709.  Keep the V4L2 report consistent with
-	 * the CSC decision rather than reinterpreting the raw field here.
-	 */
-	bool bt601 = !bt2020 && (colorimetry == 1 ||
-				 (colorimetry == 0 && width <= 720 &&
-				  height <= 576));
+	bool sd = width <= 720 && height <= 576;
 
 	pix->width = width;
 	pix->height = height;
@@ -958,14 +944,21 @@ static void gc570d_video0_fill_format(struct gc570d_dev *gc,
 	pix->field = gc570d_video_field(gc, hdmi0);
 	pix->bytesperline = width * 2;
 	pix->sizeimage = width * height * 2;
-	pix->colorspace = bt2020 ? V4L2_COLORSPACE_BT2020 :
-			  (bt601 ? V4L2_COLORSPACE_SMPTE170M :
-				   V4L2_COLORSPACE_REC709);
-	pix->ycbcr_enc = bt2020 ? V4L2_YCBCR_ENC_BT2020 :
-			 (bt601 ? V4L2_YCBCR_ENC_601 : V4L2_YCBCR_ENC_709);
-	/* The built-in placeholder is generated in limited range. */
-	pix->quantization = (limited || no_signal) ?
-		V4L2_QUANTIZATION_LIM_RANGE : V4L2_QUANTIZATION_FULL_RANGE;
+	/*
+	 * Describe the packed YUY2 buffer produced by the capture pipeline, not
+	 * the HDMI source.  HDR is tone mapped to SDR and any source YCbCr is
+	 * converted by the receiver and Xilinx stages before the packed output,
+	 * so the established output encoding is BT.709 limited range for HD
+	 * sizes and BT.601 limited range for SD sizes.  The per-source CSC
+	 * matrices are internal and do not change the DMA buffer encoding;
+	 * publishing them here would misdescribe the captured pixels.  Keep
+	 * this established metadata until the dynamic output encoding is
+	 * physically validated.
+	 */
+	pix->colorspace = sd ? V4L2_COLORSPACE_SMPTE170M :
+			       V4L2_COLORSPACE_REC709;
+	pix->ycbcr_enc = sd ? V4L2_YCBCR_ENC_601 : V4L2_YCBCR_ENC_709;
+	pix->quantization = V4L2_QUANTIZATION_LIM_RANGE;
 	pix->xfer_func = V4L2_XFER_FUNC_709;
 }
 

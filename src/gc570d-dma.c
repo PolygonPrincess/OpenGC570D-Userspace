@@ -5,8 +5,9 @@
  */
 #include "gc570d.h"
 
-static u32 gc570d_xilinx_video0_control(
-	const struct gc570d_video0_signal *signal, u16 width, u16 height);
+static u32
+gc570d_xilinx_video0_control(const struct gc570d_video0_signal *signal,
+			     u16 width, u16 height);
 
 void gc570d_reset_channel(struct gc570d_dev *gc, unsigned int channel)
 {
@@ -110,6 +111,36 @@ static int gc570d_interlaced_frame_height(u16 hactive, u16 vactive,
 		return -EINVAL;
 	}
 	return 0;
+}
+
+/*
+ * gc570d_splitter_measure_rx_timing() derives the rate from integer clock and
+ * total divisions, so a nominal 60 Hz source can measure as 57..59 Hz.  Map
+ * the measurement onto the supported HDMI cadence families with a +/-3 Hz
+ * tolerance before it drives mode selection or reaches userspace.  100/120 Hz
+ * inputs are recognised so the high-rate Xilinx mode is retained; the captured
+ * stream itself is capped at 60 fps.  Zero means "unknown" and lets callers
+ * fall back to the configured interval.
+ */
+static u16 gc570d_normalize_frame_rate(u32 measured)
+{
+	static const u16 families[] = { 24, 25, 30, 50, 60, 100, 120 };
+	u16 best = 0;
+	u32 best_delta = U32_MAX;
+	size_t i;
+
+	if (!measured)
+		return 0;
+	for (i = 0; i < ARRAY_SIZE(families); i++) {
+		u32 delta = measured > families[i] ? measured - families[i] :
+			     families[i] - measured;
+
+		if (delta < best_delta) {
+			best_delta = delta;
+			best = families[i];
+		}
+	}
+	return best_delta <= 3 ? best : 0;
 }
 
 int gc570d_dma_detect_vip1_format(struct gc570d_dev *gc,
@@ -292,11 +323,10 @@ static ssize_t gc570d_vip_init_write(struct file *file,
 		return -EINVAL;
 
 	mutex_lock(&gc->capture_lock);
-	if (gc->video_streaming || gc->video0_streaming) {
+	if (gc->video_streaming || gc->video0_streaming)
 		ret = -EBUSY;
-	} else {
+	else
 		ret = gc570d_vip_init(gc);
-	}
 	mutex_unlock(&gc->capture_lock);
 	return ret ? ret : count;
 }
@@ -399,9 +429,6 @@ int gc570d_vip0_detect_signal(
 	input_color = (avi15 >> 5) & 0x03;
 	colorimetry = avi16 >> 6;
 	extended_colorimetry = (avi17 >> 4) & 0x07;
-	/* YCbCr defaults to limited range; RGB defaults to full range. */
-	gc->video0_receiver_limited = input_color ?
-		(((avi17 >> 2) & 0x03) != 2) : (((avi17 >> 2) & 0x03) == 1);
 
 	/*
 	 * IT68051 reports the horizontal sample count for YCbCr 4:2:0.  The
@@ -497,14 +524,15 @@ out_restore_page:
 	ret = gc570d_splitter_measure_rx_timing(gc, 0, &timing);
 	if (ret && signal->working_mode != 2)
 		return ret;
-	signal->frame_rate = ret ? 0 : timing.frame_rate;
+	signal->frame_rate = ret ? 0 :
+		gc570d_normalize_frame_rate(timing.frame_rate);
 	signal->xilinx_mode = signal->working_mode == 2 ||
 				      signal->frame_rate > 60 ? 3 : 0;
 	gc->video0_input_frame_rate = signal->frame_rate;
 
 	/* Detection also runs from diagnostic paths, so keep the log rate limited. */
 	dev_info_ratelimited(&gc->pdev->dev,
-		 "VIP0 signal validated: %ux%u@%u class=%u xilinx_mode=%u vip=%ux%u profile=%s input_color=%u C=%u EC=%u output=%s\n",
+			     "VIP0 signal validated: %ux%u@%u class=%u xilinx_mode=%u vip=%ux%u profile=%s input_color=%u C=%u EC=%u output=%s\n",
 		 width, height,
 		 signal->frame_rate, signal->working_mode, signal->xilinx_mode,
 		 signal->vip_width, signal->vip_height,
@@ -741,8 +769,7 @@ int gc570d_vip0_program_yuy2(
 	writel(0, gc->bar0 + GC570D_VIP0_SCALER_CTRL);
 	writel(div_u64((u64)input_width << 20, output_width),
 	       gc->bar0 + GC570D_VIP0_SCALE_X);
-	writel(div_u64((u64)scaler_in_height << 20,
-			 scaler_out_height),
+	writel(div_u64((u64)scaler_in_height << 20, scaler_out_height),
 	       gc->bar0 + GC570D_VIP0_SCALE_Y);
 	writel((scaler_in_height << 16) | input_width,
 	       gc->bar0 + GC570D_VIP0_INPUT_SIZE);
@@ -1261,8 +1288,9 @@ static int gc570d_dma_capture_frames_channel(struct gc570d_dev *gc,
 			dma0_vip_event_after_ack = readl(gc->bar0 +
 							GC570D_VIP0_EVENT_STATUS);
 			ret = gc570d_vip0_program_yuy2(gc, &signal,
-						   capture_width, capture_height,
-						   gc->video0_frame_interval);
+						       capture_width,
+						       capture_height,
+						       gc->video0_frame_interval);
 			if (ret)
 				break;
 			dma0_index_after_vip = readl(gc->bar0 + desc_index);
